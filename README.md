@@ -1,0 +1,57 @@
+# TelegramAssistant
+
+TelegramAssistant — расширяемый Telegram-бот, первым модулем которого становится учет регулярных и обязательных платежей.
+
+Фундамент MVP завершен: solution, доменная модель, PostgreSQL/EF Core, регистрация пользователя через `/start`, справка через `/help`, Docker Compose, миграция и базовые unit-тесты.
+
+## Технологии
+
+- C# и .NET 8;
+- ASP.NET Core Generic Host;
+- Telegram Bot API;
+- Entity Framework Core и PostgreSQL;
+- Docker Compose;
+- встроенный Dependency Injection и `ILogger`.
+
+## Структура solution
+
+```text
+src/
+  TelegramAssistant.Bot             # запуск, Telegram handlers, конфигурация
+  TelegramAssistant.Application     # use cases, DTO и интерфейсы
+  TelegramAssistant.Domain          # сущности и бизнес-правила
+  TelegramAssistant.Infrastructure  # EF Core, PostgreSQL, Telegram и фоновые задачи
+tests/
+  TelegramAssistant.UnitTests
+  TelegramAssistant.IntegrationTests
+```
+
+Подробности находятся в [ARCHITECTURE.md](ARCHITECTURE.md), требования — в [REQUIREMENTS.md](REQUIREMENTS.md), текущая работа — в [TASK.md](TASK.md).
+
+## Конфигурация
+
+Секреты не хранятся в Git. Для запуска приложения используются переменные окружения `Telegram__BotToken` и `ConnectionStrings__Postgres` либо локальные User Secrets.
+
+## Запуск
+
+После завершения фундаментального этапа:
+
+```bash
+dotnet build
+dotnet test
+docker compose up --build
+```
+
+Инструкции по BotFather, миграциям и полноценному запуску будут дополнены по мере реализации соответствующих компонентов.
+
+## Документация
+
+- [Текущая задача](TASK.md)
+- [Требования](REQUIREMENTS.md)
+- [Архитектура](ARCHITECTURE.md)
+- [Будущие задачи](TODO.md)
+- [Инструкции для AI-агентов](AGENTS.md)
+
+## Статус
+
+Этап 1 завершен. Следующий этап — добавление сценариев создания и просмотра платежей.
