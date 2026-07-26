@@ -24,6 +24,7 @@ public sealed class User
     public string? Username { get; private set; }
     public string DefaultCurrency { get; private set; } = "RUB";
     public string TimeZoneId { get; private set; } = "UTC";
+    public bool IsTimeZoneConfigured { get; private set; }
     public TimeOnly ReminderTimeUtc { get; private set; }
     public DateTime CreatedAtUtc { get; private set; }
     public DateTime UpdatedAtUtc { get; private set; }
@@ -35,6 +36,13 @@ public sealed class User
         TelegramChatId = chatId;
         FirstName = firstName;
         Username = username;
+        UpdatedAtUtc = updatedAtUtc;
+    }
+
+    public void SetTimeZone(string timeZoneId, DateTime updatedAtUtc)
+    {
+        TimeZoneId = timeZoneId;
+        IsTimeZoneConfigured = true;
         UpdatedAtUtc = updatedAtUtc;
     }
 }

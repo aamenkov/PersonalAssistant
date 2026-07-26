@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using TelegramAssistant.Infrastructure;
@@ -11,9 +12,11 @@ using TelegramAssistant.Infrastructure;
 namespace TelegramAssistant.Infrastructure.Migrations
 {
     [DbContext(typeof(TelegramAssistantDbContext))]
-    partial class TelegramAssistantDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260726152545_AddUserTimeZoneConfiguration")]
+    partial class AddUserTimeZoneConfiguration
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

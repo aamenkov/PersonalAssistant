@@ -9,6 +9,19 @@ public interface IUserRepository
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }
 
+public sealed class UserTimeZoneService(IUserRepository users)
+{
+    public async Task SetAsync(long telegramUserId, string timeZoneId, CancellationToken cancellationToken)
+    {
+        TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+        var user = await users.FindByTelegramUserIdAsync(telegramUserId, cancellationToken)
+            ?? throw new InvalidOperationException("User is not registered.");
+
+        user.SetTimeZone(timeZoneId, DateTime.UtcNow);
+        await users.SaveChangesAsync(cancellationToken);
+    }
+}
+
 public sealed class UserRegistrationService(IUserRepository users)
 {
     public async Task<User> RegisterOrUpdateAsync(
