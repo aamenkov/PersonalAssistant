@@ -52,6 +52,9 @@ docker compose up --build
 - [Будущие задачи](TODO.md)
 - [Инструкции для AI-агентов](AGENTS.md)
 - [Архив завершенных задач](docs/tasks/001-project-foundation.md)
+- [Задача 002: часовой пояс](docs/tasks/002-timezone-onboarding.md)
+- [Задача 003: переименование проекта](docs/tasks/003-personal-assistant-naming.md)
+- [Задача 004: архив и Git workflow](docs/tasks/004-task-archive-workflow.md)
 
 ## Команды бота
 
