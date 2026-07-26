@@ -101,6 +101,45 @@ public sealed class RecurringPayment
     public DateTime UpdatedAtUtc { get; private set; }
     public ICollection<PaymentTransaction> Transactions { get; private set; } = new List<PaymentTransaction>();
     public ICollection<Reminder> Reminders { get; private set; } = new List<Reminder>();
+
+    public void UpdateDetails(
+        string name,
+        decimal amount,
+        string currency,
+        int recurrenceInterval,
+        RecurrenceUnit recurrenceUnit,
+        DateOnly nextPaymentDate,
+        PaymentMethod paymentMethod,
+        bool isAutoDebit,
+        string? description,
+        DateTime updatedAtUtc)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("Payment name is required.", nameof(name));
+        if (amount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(amount), "Payment amount must be greater than zero.");
+        if (string.IsNullOrWhiteSpace(currency) || currency.Trim().Length != 3)
+            throw new ArgumentException("Currency must be a three-letter code.", nameof(currency));
+        if (recurrenceInterval <= 0)
+            throw new ArgumentOutOfRangeException(nameof(recurrenceInterval));
+
+        Name = name.Trim();
+        Amount = amount;
+        Currency = currency.Trim().ToUpperInvariant();
+        RecurrenceInterval = recurrenceInterval;
+        RecurrenceUnit = recurrenceUnit;
+        NextPaymentDate = nextPaymentDate;
+        PaymentMethod = paymentMethod;
+        IsAutoDebit = isAutoDebit;
+        Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
+        UpdatedAtUtc = updatedAtUtc;
+    }
+
+    public void Deactivate(DateTime updatedAtUtc)
+    {
+        IsActive = false;
+        UpdatedAtUtc = updatedAtUtc;
+    }
 }
 
 public sealed class PaymentTransaction
