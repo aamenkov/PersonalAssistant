@@ -140,11 +140,46 @@ public sealed class RecurringPayment
         IsActive = false;
         UpdatedAtUtc = updatedAtUtc;
     }
+
+    public PaymentTransaction RecordPayment(decimal paidAmount, DateOnly paidDate, string paidPeriod, string? comment, DateTime createdAtUtc)
+    {
+        if (!IsActive)
+            throw new InvalidOperationException("Inactive payment cannot be paid.");
+        if (paidAmount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(paidAmount), "Paid amount must be greater than zero.");
+        if (string.IsNullOrWhiteSpace(paidPeriod))
+            throw new ArgumentException("Paid period is required.", nameof(paidPeriod));
+
+        var transaction = PaymentTransaction.Create(Id, paidAmount, paidDate, paidPeriod, comment, createdAtUtc);
+        Transactions.Add(transaction);
+        if (RecurrenceUnit == RecurrenceUnit.Once)
+            Deactivate(createdAtUtc);
+        else if (NextPaymentDate.HasValue)
+        {
+            NextPaymentDate = PaymentDateCalculator.CalculateNext(NextPaymentDate.Value, RecurrenceInterval, RecurrenceUnit);
+            UpdatedAtUtc = createdAtUtc;
+        }
+
+        return transaction;
+    }
 }
 
 public sealed class PaymentTransaction
 {
     private PaymentTransaction() { }
+
+    private PaymentTransaction(Guid recurringPaymentId, decimal paidAmount, DateOnly paidDate, string paidPeriod, string? comment, DateTime createdAtUtc)
+    {
+        RecurringPaymentId = recurringPaymentId;
+        PaidAmount = paidAmount;
+        PaidDate = paidDate;
+        PaidPeriod = paidPeriod.Trim();
+        Comment = string.IsNullOrWhiteSpace(comment) ? null : comment.Trim();
+        CreatedAtUtc = createdAtUtc;
+    }
+
+    public static PaymentTransaction Create(Guid recurringPaymentId, decimal paidAmount, DateOnly paidDate, string paidPeriod, string? comment, DateTime createdAtUtc) =>
+        new(recurringPaymentId, paidAmount, paidDate, paidPeriod, comment, createdAtUtc);
 
     public Guid Id { get; private set; } = Guid.NewGuid();
     public Guid RecurringPaymentId { get; private set; }

@@ -90,6 +90,23 @@ public sealed class PaymentRepository(PersonalAssistantDbContext db) : IPaymentR
         return await query.OrderBy(x => x.NextPaymentDate).ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<PaymentTransaction>> GetTransactionsForOwnerAsync(Guid userId, Guid? paymentId, DateOnly? from, DateOnly? to, CancellationToken cancellationToken)
+    {
+        var query = db.PaymentTransactions
+            .AsNoTracking()
+            .Include(x => x.RecurringPayment)
+            .Where(x => x.RecurringPayment.UserId == userId);
+
+        if (paymentId.HasValue)
+            query = query.Where(x => x.RecurringPaymentId == paymentId.Value);
+        if (from.HasValue)
+            query = query.Where(x => x.PaidDate >= from.Value);
+        if (to.HasValue)
+            query = query.Where(x => x.PaidDate <= to.Value);
+
+        return await query.OrderByDescending(x => x.PaidDate).ToListAsync(cancellationToken);
+    }
+
     public Task SaveChangesAsync(CancellationToken cancellationToken) => db.SaveChangesAsync(cancellationToken);
 }
 
