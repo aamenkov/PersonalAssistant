@@ -13,11 +13,26 @@ public sealed class PaymentRecordTests
         var transaction = payment.RecordPayment(35, new DateOnly(2026, 7, 30), "2026-07-31", "Оплачено", DateTime.UtcNow);
 
         Assert.Equal(35, transaction.PaidAmount);
+        Assert.Equal(30, transaction.ExpectedAmount);
         Assert.Equal(new DateOnly(2026, 7, 30), transaction.PaidDate);
         Assert.Equal("2026-07-31", transaction.PaidPeriod);
         Assert.Single(payment.Transactions);
         Assert.Equal(new DateOnly(2026, 8, 31), payment.NextPaymentDate);
         Assert.True(payment.IsActive);
+    }
+
+    [Fact]
+    public void RecordedExpectedAmount_DoesNotChangeAfterPaymentEdit()
+    {
+        var payment = RecurringPayment.Create(Guid.NewGuid(), "Internet", 30, "RUB", 1, RecurrenceUnit.Month,
+            new DateOnly(2026, 7, 31), DateTime.UtcNow);
+        var transaction = payment.RecordPayment(29, new DateOnly(2026, 7, 30), "2026-07-31", null, DateTime.UtcNow);
+
+        payment.UpdateDetails("Internet", 40, "RUB", 1, RecurrenceUnit.Month, payment.NextPaymentDate!.Value,
+            PaymentMethod.Card, false, null, DateTime.UtcNow);
+
+        Assert.Equal(30, transaction.ExpectedAmount);
+        Assert.Equal(29, transaction.PaidAmount);
     }
 
     [Fact]
