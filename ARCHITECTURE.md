@@ -24,6 +24,8 @@ flowchart LR
 
 Создание платежа реализовано через `PaymentConversationService`: каждый шаг сериализуется в `ConversationState.PayloadJson`, поэтому диалог не теряется после перезапуска. `PaymentService` создает платеж только с переданным `UserId`, а `PaymentRepository` фильтрует выборки по владельцу и активности.
 
+Редактирование реализовано через `PaymentEditConversationService`: платеж выбирается callback-кнопкой, а изменения полей сохраняются в том же `ConversationState`. `PaymentService` получает платеж только через owner-scoped запрос, применяет доменный `UpdateDetails` и не затрагивает связанные транзакции. Отключение выполняется через `Deactivate` после отдельного подтверждения и оставляет запись платежа и его историю в базе.
+
 ## Связи данных
 
 `User` 1:N `RecurringPayment`; `RecurringPayment` 1:N `PaymentTransaction`; `RecurringPayment` 1:N `Reminder`; `User` 1:1 `ConversationState`. Все запросы платежей включают владельца.

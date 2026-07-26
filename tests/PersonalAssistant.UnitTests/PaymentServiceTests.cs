@@ -30,6 +30,9 @@ public sealed class PaymentServiceTests
             return Task.CompletedTask;
         }
 
+        public Task<RecurringPayment?> FindForOwnerAsync(Guid userId, Guid paymentId, CancellationToken cancellationToken) =>
+            Task.FromResult(Items.SingleOrDefault(x => x.UserId == userId && x.Id == paymentId));
+
         public Task<IReadOnlyList<RecurringPayment>> GetActiveAsync(Guid userId, DateOnly? from, DateOnly? to, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<RecurringPayment>>(Items.Where(x => x.UserId == userId).ToList());
 
