@@ -1,4 +1,4 @@
-# Архитектура TelegramAssistant
+# Архитектура PersonalAssistant
 
 ## Обзор
 
@@ -6,9 +6,9 @@
 
 ```mermaid
 flowchart LR
-    Bot[TelegramAssistant.Bot] --> Application[TelegramAssistant.Application]
-    Bot --> Infrastructure[TelegramAssistant.Infrastructure]
-    Application --> Domain[TelegramAssistant.Domain]
+    Bot[TgBot] --> Application[PersonalAssistant.Application]
+    Bot --> Infrastructure[PersonalAssistant.Infrastructure]
+    Application --> Domain[PersonalAssistant.Domain]
     Infrastructure --> Application
     Infrastructure --> Domain
 ```

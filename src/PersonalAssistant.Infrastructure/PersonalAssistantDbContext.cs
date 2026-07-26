@@ -1,10 +1,10 @@
 using Microsoft.EntityFrameworkCore;
-using TelegramAssistant.Application;
-using TelegramAssistant.Domain;
+using PersonalAssistant.Application;
+using PersonalAssistant.Domain;
 
-namespace TelegramAssistant.Infrastructure;
+namespace PersonalAssistant.Infrastructure;
 
-public sealed class TelegramAssistantDbContext(DbContextOptions<TelegramAssistantDbContext> options)
+public sealed class PersonalAssistantDbContext(DbContextOptions<PersonalAssistantDbContext> options)
     : DbContext(options)
 {
     public DbSet<User> Users => Set<User>();
@@ -59,7 +59,7 @@ public sealed class TelegramAssistantDbContext(DbContextOptions<TelegramAssistan
     }
 }
 
-public sealed class UserRepository(TelegramAssistantDbContext db) : IUserRepository
+public sealed class UserRepository(PersonalAssistantDbContext db) : IUserRepository
 {
     public Task<User?> FindByTelegramUserIdAsync(long telegramUserId, CancellationToken cancellationToken) =>
         db.Users.SingleOrDefaultAsync(x => x.TelegramUserId == telegramUserId, cancellationToken);

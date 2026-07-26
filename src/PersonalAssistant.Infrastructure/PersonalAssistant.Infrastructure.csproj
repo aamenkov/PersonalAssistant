@@ -1,8 +1,8 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\TelegramAssistant.Domain\TelegramAssistant.Domain.csproj" />
-    <ProjectReference Include="..\TelegramAssistant.Application\TelegramAssistant.Application.csproj" />
+    <ProjectReference Include="..\PersonalAssistant.Domain\PersonalAssistant.Domain.csproj" />
+    <ProjectReference Include="..\PersonalAssistant.Application\PersonalAssistant.Application.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

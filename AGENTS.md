@@ -6,7 +6,7 @@
 - После коммита завершенную задачу переносить в `docs/tasks/NNN-short-name.md`, а `TASK.md` обновлять под следующую задачу.
 - В конце каждой задачи сообщать статус ветки, коммита, тестов и наличие/отсутствие Git remote.
 - Перед изменениями прочитать `TASK.md`, `REQUIREMENTS.md` и `ARCHITECTURE.md`.
-- Сохранять название solution и проектов с префиксом `TelegramAssistant`.
+- Сохранять название solution и проектов с префиксом `PersonalAssistant`.
 - Не помещать секреты в исходный код, конфигурацию или логи.
 - Не смешивать Telegram, EF Core и бизнес-правила в одном обработчике.
 - После значимых изменений запускать `dotnet build`, `dotnet test` и относящиеся к задаче проверки.
@@ -30,8 +30,8 @@ codex/003-payment-creation
 git switch master
 git pull
 git switch -c codex/NNN-short-name
-dotnet build TelegramAssistant.sln
-dotnet test TelegramAssistant.sln
+dotnet build PersonalAssistant.sln
+dotnet test PersonalAssistant.sln
 git add .
 git commit -m "Short task description"
 ```

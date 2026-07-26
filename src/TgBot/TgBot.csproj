@@ -4,7 +4,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <UserSecretsId>dotnet-TelegramAssistant.Bot-16a19065-3b29-4db3-b776-a6a1a224518d</UserSecretsId>
+    <UserSecretsId>dotnet-TgBot-16a19065-3b29-4db3-b776-a6a1a224518d</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,8 +17,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\TelegramAssistant.Domain\TelegramAssistant.Domain.csproj" />
-    <ProjectReference Include="..\TelegramAssistant.Application\TelegramAssistant.Application.csproj" />
-    <ProjectReference Include="..\TelegramAssistant.Infrastructure\TelegramAssistant.Infrastructure.csproj" />
+    <ProjectReference Include="..\PersonalAssistant.Domain\PersonalAssistant.Domain.csproj" />
+    <ProjectReference Include="..\PersonalAssistant.Application\PersonalAssistant.Application.csproj" />
+    <ProjectReference Include="..\PersonalAssistant.Infrastructure\PersonalAssistant.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

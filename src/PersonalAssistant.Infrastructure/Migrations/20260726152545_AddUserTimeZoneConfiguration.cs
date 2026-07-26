@@ -1,8 +1,8 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace TelegramAssistant.Infrastructure.Migrations
+namespace PersonalAssistant.Infrastructure.Migrations
 {
     /// <inheritdoc />
     public partial class AddUserTimeZoneConfiguration : Migration

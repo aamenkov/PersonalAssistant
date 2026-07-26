@@ -1,6 +1,6 @@
-using TelegramAssistant.Domain;
+using PersonalAssistant.Domain;
 
-namespace TelegramAssistant.Application;
+namespace PersonalAssistant.Application;
 
 public interface IUserRepository
 {

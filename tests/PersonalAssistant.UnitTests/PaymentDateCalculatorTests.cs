@@ -1,6 +1,6 @@
-using TelegramAssistant.Domain;
+using PersonalAssistant.Domain;
 
-namespace TelegramAssistant.UnitTests;
+namespace PersonalAssistant.UnitTests;
 
 public sealed class PaymentDateCalculatorTests
 {

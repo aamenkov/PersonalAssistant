@@ -4,14 +4,14 @@ using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
-using TelegramAssistant.Application;
-using TelegramAssistant.Infrastructure;
+using PersonalAssistant.Application;
+using PersonalAssistant.Infrastructure;
 
 var builder = Host.CreateApplicationBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("Postgres")
-    ?? "Host=localhost;Port=5432;Database=telegramassistant;Username=telegramassistant;Password=change-me";
+    ?? "Host=localhost;Port=5432;Database=personalassistant;Username=personalassistant;Password=change-me";
 
-builder.Services.AddDbContext<TelegramAssistantDbContext>(options => options.UseNpgsql(connectionString));
+builder.Services.AddDbContext<PersonalAssistantDbContext>(options => options.UseNpgsql(connectionString));
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<UserRegistrationService>();
 builder.Services.AddScoped<UserTimeZoneService>();
@@ -30,7 +30,7 @@ internal sealed class TelegramPollingService(
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
         bot.StartReceiving(HandleUpdateAsync, HandleErrorAsync, new ReceiverOptions { DropPendingUpdates = true }, stoppingToken);
-        logger.LogInformation("TelegramAssistant polling started");
+        logger.LogInformation("PersonalAssistant polling started");
         return Task.CompletedTask;
     }
 
@@ -65,7 +65,7 @@ internal sealed class TelegramPollingService(
             var registration = scope.ServiceProvider.GetRequiredService<UserRegistrationService>();
             await registration.RegisterOrUpdateAsync(from.Id, update.Message.Chat.Id, from.FirstName, from.Username, cancellationToken);
             await client.SendMessage(update.Message.Chat.Id,
-                "Добро пожаловать в TelegramAssistant!\n\nЧтобы напоминания приходили по вашему местному времени, выберите часовой пояс:",
+                "Добро пожаловать в PersonalAssistant!\n\nЧтобы напоминания приходили по вашему местному времени, выберите часовой пояс:",
                 replyMarkup: TimeZoneKeyboard(), cancellationToken: cancellationToken);
         }
         else if (text.StartsWith("/settings", StringComparison.OrdinalIgnoreCase))
