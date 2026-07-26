@@ -1,8 +1,8 @@
-# TelegramAssistant
+# PersonalAssistant
 
-TelegramAssistant — расширяемый Telegram-бот, первым модулем которого становится учет регулярных и обязательных платежей.
+PersonalAssistant — расширяемый Telegram-бот, первым модулем которого становится учет регулярных и обязательных платежей.
 
-Фундамент MVP завершен: solution, доменная модель, PostgreSQL/EF Core, регистрация пользователя через `/start`, справка через `/help`, Docker Compose, миграция и базовые unit-тесты.
+Фундамент MVP завершен: solution, доменная модель, PostgreSQL/EF Core, регистрация пользователя через `/start`, выбор часового пояса, справка через `/help`, Docker Compose, миграция и базовые unit-тесты.
 
 ## Технологии
 
@@ -17,13 +17,13 @@ TelegramAssistant — расширяемый Telegram-бот, первым мо�
 
 ```text
 src/
-  TelegramAssistant.Bot             # запуск, Telegram handlers, конфигурация
-  TelegramAssistant.Application     # use cases, DTO и интерфейсы
-  TelegramAssistant.Domain          # сущности и бизнес-правила
-  TelegramAssistant.Infrastructure  # EF Core, PostgreSQL, Telegram и фоновые задачи
+  TgBot             # запуск, Telegram handlers, конфигурация
+  PersonalAssistant.Application     # use cases, DTO и интерфейсы
+  PersonalAssistant.Domain          # сущности и бизнес-правила
+  PersonalAssistant.Infrastructure  # EF Core, PostgreSQL, Telegram и фоновые задачи
 tests/
-  TelegramAssistant.UnitTests
-  TelegramAssistant.IntegrationTests
+  PersonalAssistant.UnitTests
+  PersonalAssistant.IntegrationTests
 ```
 
 Подробности находятся в [ARCHITECTURE.md](ARCHITECTURE.md), требования — в [REQUIREMENTS.md](REQUIREMENTS.md), текущая работа — в [TASK.md](TASK.md).
@@ -51,6 +51,13 @@ docker compose up --build
 - [Архитектура](ARCHITECTURE.md)
 - [Будущие задачи](TODO.md)
 - [Инструкции для AI-агентов](AGENTS.md)
+- [Архив завершенных задач](docs/tasks/001-project-foundation.md)
+
+## Команды бота
+
+- `/start` — регистрация и выбор часового пояса;
+- `/settings` — повторный выбор часового пояса;
+- `/help` — справка.
 
 ## Статус
 

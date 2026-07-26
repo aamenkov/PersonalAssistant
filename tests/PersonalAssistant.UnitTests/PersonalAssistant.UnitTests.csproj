@@ -21,8 +21,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\TelegramAssistant.Domain\TelegramAssistant.Domain.csproj" />
-    <ProjectReference Include="..\..\src\TelegramAssistant.Application\TelegramAssistant.Application.csproj" />
+    <ProjectReference Include="..\..\src\PersonalAssistant.Domain\PersonalAssistant.Domain.csproj" />
+    <ProjectReference Include="..\..\src\PersonalAssistant.Application\PersonalAssistant.Application.csproj" />
   </ItemGroup>
 
 </Project>

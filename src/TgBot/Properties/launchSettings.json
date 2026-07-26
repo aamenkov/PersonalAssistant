@@ -1,7 +1,7 @@
-﻿{
+{
   "$schema": "http://json.schemastore.org/launchsettings.json",
   "profiles": {
-    "TelegramAssistant.Bot": {
+    "TgBot": {
       "commandName": "Project",
       "dotnetRunMessages": true,
       "environmentVariables": {

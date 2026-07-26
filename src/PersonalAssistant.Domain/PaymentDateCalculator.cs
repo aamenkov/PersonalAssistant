@@ -1,4 +1,4 @@
-namespace TelegramAssistant.Domain;
+namespace PersonalAssistant.Domain;
 
 public static class PaymentDateCalculator
 {
