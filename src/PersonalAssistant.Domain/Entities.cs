@@ -150,7 +150,7 @@ public sealed class RecurringPayment
         if (string.IsNullOrWhiteSpace(paidPeriod))
             throw new ArgumentException("Paid period is required.", nameof(paidPeriod));
 
-        var transaction = PaymentTransaction.Create(Id, paidAmount, Currency, paidDate, paidPeriod, comment, createdAtUtc);
+        var transaction = PaymentTransaction.Create(Id, Amount, paidAmount, Currency, paidDate, paidPeriod, comment, createdAtUtc);
         transaction.RecurringPayment = this;
         Transactions.Add(transaction);
         if (RecurrenceUnit == RecurrenceUnit.Once)
@@ -169,9 +169,10 @@ public sealed class PaymentTransaction
 {
     private PaymentTransaction() { }
 
-    private PaymentTransaction(Guid recurringPaymentId, decimal paidAmount, string currency, DateOnly paidDate, string paidPeriod, string? comment, DateTime createdAtUtc)
+    private PaymentTransaction(Guid recurringPaymentId, decimal expectedAmount, decimal paidAmount, string currency, DateOnly paidDate, string paidPeriod, string? comment, DateTime createdAtUtc)
     {
         RecurringPaymentId = recurringPaymentId;
+        ExpectedAmount = expectedAmount;
         PaidAmount = paidAmount;
         Currency = currency;
         PaidDate = paidDate;
@@ -180,12 +181,13 @@ public sealed class PaymentTransaction
         CreatedAtUtc = createdAtUtc;
     }
 
-    public static PaymentTransaction Create(Guid recurringPaymentId, decimal paidAmount, string currency, DateOnly paidDate, string paidPeriod, string? comment, DateTime createdAtUtc) =>
-        new(recurringPaymentId, paidAmount, currency, paidDate, paidPeriod, comment, createdAtUtc);
+    public static PaymentTransaction Create(Guid recurringPaymentId, decimal expectedAmount, decimal paidAmount, string currency, DateOnly paidDate, string paidPeriod, string? comment, DateTime createdAtUtc) =>
+        new(recurringPaymentId, expectedAmount, paidAmount, currency, paidDate, paidPeriod, comment, createdAtUtc);
 
     public Guid Id { get; private set; } = Guid.NewGuid();
     public Guid RecurringPaymentId { get; private set; }
     public RecurringPayment RecurringPayment { get; internal set; } = null!;
+    public decimal ExpectedAmount { get; private set; }
     public decimal PaidAmount { get; private set; }
     public string Currency { get; private set; } = "RUB";
     public DateOnly PaidDate { get; private set; }
@@ -223,6 +225,14 @@ public sealed class ConversationState
     {
         PayloadJson = payloadJson;
         UpdatedAtUtc = updatedAtUtc;
+    }
+
+    public void Reset(ConversationKind kind, string payloadJson, DateTime updatedAtUtc)
+    {
+        Kind = kind;
+        PayloadJson = payloadJson;
+        UpdatedAtUtc = updatedAtUtc;
+        Version++;
     }
 
     public Guid Id { get; private set; } = Guid.NewGuid();

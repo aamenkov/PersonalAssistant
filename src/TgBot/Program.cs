@@ -1,4 +1,3 @@
-using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
@@ -9,10 +8,11 @@ using PersonalAssistant.Application;
 using PersonalAssistant.Infrastructure;
 
 var builder = Host.CreateApplicationBuilder(args);
-var connectionString = builder.Configuration.GetConnectionString("Postgres")
-    ?? "Host=localhost;Port=5432;Database=personalassistant;Username=personalassistant;Password=change-me";
+var botToken = builder.Configuration["Telegram:BotToken"];
+if (string.IsNullOrWhiteSpace(botToken))
+    throw new InvalidOperationException("Telegram:BotToken is not configured.");
 
-builder.Services.AddDbContext<PersonalAssistantDbContext>(options => options.UseNpgsql(connectionString));
+builder.Services.AddPersonalAssistantInfrastructure(builder.Configuration);
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<UserRegistrationService>();
 builder.Services.AddScoped<UserTimeZoneService>();
@@ -22,27 +22,54 @@ builder.Services.AddScoped<PaymentService>();
 builder.Services.AddScoped<PaymentConversationService>();
 builder.Services.AddScoped<PaymentEditConversationService>();
 builder.Services.AddScoped<PaymentRecordConversationService>();
-builder.Services.AddSingleton<ITelegramBotClient>(_ =>
-    new TelegramBotClient(builder.Configuration["Telegram:BotToken"]
-        ?? throw new InvalidOperationException("Telegram:BotToken is not configured.")));
+builder.Services.AddSingleton(new BotAccessPolicy(builder.Configuration.GetValue<long?>("Telegram:AllowedUserId")));
+builder.Services.AddSingleton<ITelegramBotClient>(_ => new TelegramBotClient(botToken));
 builder.Services.AddHostedService<TelegramPollingService>();
 
-await builder.Build().RunAsync();
+var app = builder.Build();
+await ApplyMigrationsAsync(app);
+await app.RunAsync();
+
+static async Task ApplyMigrationsAsync(IHost app)
+{
+    using var scope = app.Services.CreateScope();
+    var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("DatabaseMigration");
+    logger.LogInformation("Applying database migrations");
+    await scope.ServiceProvider.GetRequiredService<PersonalAssistantDbContext>().Database.MigrateAsync();
+    logger.LogInformation("Database migrations applied");
+}
+
+internal sealed record BotAccessPolicy(long? AllowedUserId)
+{
+    public bool IsAllowed(long telegramUserId) => !AllowedUserId.HasValue || AllowedUserId.Value == telegramUserId;
+}
 
 internal sealed class TelegramPollingService(
     ITelegramBotClient bot,
     IServiceScopeFactory scopeFactory,
+    BotAccessPolicy accessPolicy,
     ILogger<TelegramPollingService> logger) : BackgroundService
 {
-    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        bot.StartReceiving(HandleUpdateAsync, HandleErrorAsync, new ReceiverOptions { DropPendingUpdates = true }, stoppingToken);
+        bot.StartReceiving(HandleUpdateAsync, HandleErrorAsync, new ReceiverOptions { DropPendingUpdates = false }, stoppingToken);
         logger.LogInformation("PersonalAssistant polling started");
-        return Task.CompletedTask;
+        await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken);
     }
 
     private async Task HandleUpdateAsync(ITelegramBotClient client, Update update, CancellationToken cancellationToken)
     {
+        var telegramUserId = update.CallbackQuery?.From.Id ?? update.Message?.From?.Id;
+        if (telegramUserId.HasValue && !accessPolicy.IsAllowed(telegramUserId.Value))
+        {
+            logger.LogWarning("Rejected Telegram update from unauthorized user");
+            if (update.CallbackQuery is { } unauthorizedCallback)
+                await client.AnswerCallbackQuery(unauthorizedCallback.Id, "Доступ к боту ограничен.", showAlert: true, cancellationToken: cancellationToken);
+            else if (update.Message is { } unauthorizedMessage)
+                await client.SendMessage(unauthorizedMessage.Chat.Id, "Доступ к боту ограничен.", cancellationToken: cancellationToken);
+            return;
+        }
+
         if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery?.Data is { } paymentCallback && paymentCallback.StartsWith("payment:", StringComparison.Ordinal))
         {
             using var scope = scopeFactory.CreateScope();
@@ -74,7 +101,7 @@ internal sealed class TelegramPollingService(
             if (parts[1] == "pay")
             {
                 var recorder = scope.ServiceProvider.GetRequiredService<PaymentRecordConversationService>();
-                var response = await recorder.BeginAsync(user.Id, paymentId, cancellationToken);
+                var response = await recorder.BeginAsync(user.Id, paymentId, LocalDate(user.TimeZoneId), cancellationToken);
                 await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
                 if (update.CallbackQuery.Message is { } message)
                     await client.SendMessage(message.Chat.Id, response, cancellationToken: cancellationToken);
@@ -91,7 +118,7 @@ internal sealed class TelegramPollingService(
                             new[]
                             {
                                 InlineKeyboardButton.WithCallbackData("Да, отключить", $"payment:disable-confirm:{paymentId}"),
-                                InlineKeyboardButton.WithCallbackData("Отмена", "payment:disable-cancel:0")
+                                InlineKeyboardButton.WithCallbackData("Отмена", $"payment:disable-cancel:{Guid.Empty}")
                             }
                         }), cancellationToken: cancellationToken);
                 return;
@@ -123,9 +150,13 @@ internal sealed class TelegramPollingService(
                 if (update.CallbackQuery.Message is { } callbackMessage)
                     await client.SendMessage(callbackMessage.Chat.Id, $"Готово. Часовой пояс: {timeZoneId}.", cancellationToken: cancellationToken);
             }
-            catch (TimeZoneNotFoundException)
+            catch (Exception exception) when (exception is TimeZoneNotFoundException or InvalidTimeZoneException)
             {
                 await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Неизвестный часовой пояс", showAlert: true, cancellationToken: cancellationToken);
+            }
+            catch (InvalidOperationException)
+            {
+                await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Сначала выполните /start", showAlert: true, cancellationToken: cancellationToken);
             }
 
             return;
@@ -134,16 +165,20 @@ internal sealed class TelegramPollingService(
         if (update.Type != UpdateType.Message || update.Message?.Text is not { } text || update.Message.From is not { } from)
             return;
 
-        if (text.StartsWith("/start", StringComparison.OrdinalIgnoreCase))
+        var command = GetCommand(text);
+        if (command == "/start")
         {
             using var scope = scopeFactory.CreateScope();
             var registration = scope.ServiceProvider.GetRequiredService<UserRegistrationService>();
-            await registration.RegisterOrUpdateAsync(from.Id, update.Message.Chat.Id, from.FirstName, from.Username, cancellationToken);
-            await client.SendMessage(update.Message.Chat.Id,
-                "Добро пожаловать в PersonalAssistant!\n\nЧтобы напоминания приходили по вашему местному времени, выберите часовой пояс:",
-                replyMarkup: TimeZoneKeyboard(), cancellationToken: cancellationToken);
+            var user = await registration.RegisterOrUpdateAsync(from.Id, update.Message.Chat.Id, from.FirstName, from.Username, cancellationToken);
+            if (user.IsTimeZoneConfigured)
+                await client.SendMessage(update.Message.Chat.Id, $"С возвращением! Ваш часовой пояс: {user.TimeZoneId}.", cancellationToken: cancellationToken);
+            else
+                await client.SendMessage(update.Message.Chat.Id,
+                    "Добро пожаловать в PersonalAssistant!\n\nЧтобы напоминания приходили по вашему местному времени, выберите часовой пояс:",
+                    replyMarkup: TimeZoneKeyboard(), cancellationToken: cancellationToken);
         }
-        else if (text.StartsWith("/add", StringComparison.OrdinalIgnoreCase))
+        else if (command == "/add")
         {
             using var scope = scopeFactory.CreateScope();
             var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
@@ -157,7 +192,7 @@ internal sealed class TelegramPollingService(
             var conversations = scope.ServiceProvider.GetRequiredService<PaymentConversationService>();
             await client.SendMessage(update.Message.Chat.Id, await conversations.BeginAsync(user.Id, cancellationToken), cancellationToken: cancellationToken);
         }
-        else if (text.StartsWith("/payments", StringComparison.OrdinalIgnoreCase) || text.StartsWith("/upcoming", StringComparison.OrdinalIgnoreCase))
+        else if (command is "/payments" or "/upcoming")
         {
             using var scope = scopeFactory.CreateScope();
             var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
@@ -169,12 +204,12 @@ internal sealed class TelegramPollingService(
             }
 
             var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
-            var isUpcoming = text.StartsWith("/upcoming", StringComparison.OrdinalIgnoreCase);
+            var isUpcoming = command == "/upcoming";
             var today = LocalDate(user.TimeZoneId);
-            var items = await payments.GetActiveAsync(user.Id, isUpcoming ? today : null, isUpcoming ? today.AddDays(7) : null, cancellationToken);
+            var items = await payments.GetActiveAsync(user.Id, isUpcoming ? today : null, isUpcoming ? today.AddDays(6) : null, cancellationToken);
             await client.SendMessage(update.Message.Chat.Id, FormatPayments(items, isUpcoming), cancellationToken: cancellationToken);
         }
-        else if (text.StartsWith("/edit", StringComparison.OrdinalIgnoreCase) || text.StartsWith("/disable", StringComparison.OrdinalIgnoreCase) || text.StartsWith("/pay", StringComparison.OrdinalIgnoreCase))
+        else if (command is "/edit" or "/disable" or "/pay")
         {
             using var scope = scopeFactory.CreateScope();
             var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
@@ -187,8 +222,8 @@ internal sealed class TelegramPollingService(
 
             var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
             var items = await payments.GetActiveAsync(user.Id, null, null, cancellationToken);
-            var isEdit = text.StartsWith("/edit", StringComparison.OrdinalIgnoreCase);
-            var isPay = text.StartsWith("/pay", StringComparison.OrdinalIgnoreCase);
+            var isEdit = command == "/edit";
+            var isPay = command == "/pay";
             if (items.Count == 0)
             {
                 await client.SendMessage(update.Message.Chat.Id, "Активных платежей пока нет.", cancellationToken: cancellationToken);
@@ -200,7 +235,7 @@ internal sealed class TelegramPollingService(
             await client.SendMessage(update.Message.Chat.Id, prompt,
                 replyMarkup: PaymentActionKeyboard(items, action), cancellationToken: cancellationToken);
         }
-        else if (text.StartsWith("/history", StringComparison.OrdinalIgnoreCase))
+        else if (command == "/history")
         {
             using var scope = scopeFactory.CreateScope();
             var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
@@ -212,11 +247,17 @@ internal sealed class TelegramPollingService(
             }
 
             var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
-            var (startDate, endDate) = ParseMonthRange(text, user.TimeZoneId);
+            if (!TryParseMonth(text, user.TimeZoneId, out var year, out var month))
+            {
+                await client.SendMessage(update.Message.Chat.Id, "Укажите месяц в формате `/history ГГГГ-ММ`, например `/history 2026-08`.", cancellationToken: cancellationToken);
+                return;
+            }
+            var startDate = new DateOnly(year, month, 1);
+            var endDate = startDate.AddMonths(1).AddDays(-1);
             var history = await payments.GetHistoryAsync(user.Id, null, startDate, endDate, cancellationToken);
             await client.SendMessage(update.Message.Chat.Id, FormatHistory(history), cancellationToken: cancellationToken);
         }
-        else if (text.StartsWith("/stats", StringComparison.OrdinalIgnoreCase))
+        else if (command == "/stats")
         {
             using var scope = scopeFactory.CreateScope();
             var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
@@ -227,17 +268,29 @@ internal sealed class TelegramPollingService(
                 return;
             }
 
-            var (year, month) = ParseMonth(text, user.TimeZoneId);
+            if (!TryParseMonth(text, user.TimeZoneId, out var year, out var month))
+            {
+                await client.SendMessage(update.Message.Chat.Id, "Укажите месяц в формате `/stats ГГГГ-ММ`, например `/stats 2026-08`.", cancellationToken: cancellationToken);
+                return;
+            }
             var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
             var statistics = await payments.GetMonthlyStatisticsAsync(user.Id, year, month, cancellationToken);
             await client.SendMessage(update.Message.Chat.Id, FormatStatistics(year, month, statistics), cancellationToken: cancellationToken);
         }
-        else if (text.StartsWith("/settings", StringComparison.OrdinalIgnoreCase))
+        else if (command == "/settings")
         {
+            using var scope = scopeFactory.CreateScope();
+            var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+            if (await users.FindByTelegramUserIdAsync(from.Id, cancellationToken) is null)
+            {
+                await client.SendMessage(update.Message.Chat.Id, "Сначала выполните /start.", cancellationToken: cancellationToken);
+                return;
+            }
+
             await client.SendMessage(update.Message.Chat.Id, "Выберите часовой пояс для напоминаний:",
                 replyMarkup: TimeZoneKeyboard(), cancellationToken: cancellationToken);
         }
-        else if (text.StartsWith("/help", StringComparison.OrdinalIgnoreCase))
+        else if (command == "/help")
         {
             await client.SendMessage(update.Message.Chat.Id, "Доступные команды:\n/start — регистрация и выбор часового пояса\n/settings — изменить часовой пояс\n/add — добавить платеж\n/payments — все активные платежи\n/upcoming — платежи на ближайшие 7 дней\n/edit — изменить платеж\n/disable — отключить платеж\n/pay — отметить оплату\n/history [YYYY-MM] — история оплат\n/stats [YYYY-MM] — статистика месяца\n/help — справка", cancellationToken: cancellationToken);
         }
@@ -247,13 +300,18 @@ internal sealed class TelegramPollingService(
             var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
             var user = await users.FindByTelegramUserIdAsync(from.Id, cancellationToken);
             if (user is null)
+            {
+                await client.SendMessage(update.Message.Chat.Id, "Сначала выполните /start.", cancellationToken: cancellationToken);
                 return;
+            }
 
             var response = await scope.ServiceProvider.GetRequiredService<PaymentConversationService>().HandleInputAsync(user.Id, text, cancellationToken)
                 ?? await scope.ServiceProvider.GetRequiredService<PaymentEditConversationService>().HandleInputAsync(user.Id, text, cancellationToken)
                 ?? await scope.ServiceProvider.GetRequiredService<PaymentRecordConversationService>().HandleInputAsync(user.Id, text, cancellationToken);
             if (response is not null)
                 await client.SendMessage(update.Message.Chat.Id, response, cancellationToken: cancellationToken);
+            else
+                await client.SendMessage(update.Message.Chat.Id, "Команда не распознана. Используйте /help.", cancellationToken: cancellationToken);
         }
     }
 
@@ -301,23 +359,32 @@ internal sealed class TelegramPollingService(
         return "История оплат:\n" + string.Join("\n", lines);
     }
 
-    private static (DateOnly? From, DateOnly? To) ParseMonthRange(string command, string timeZoneId)
+    private static string? GetCommand(string text)
     {
-        var parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var (year, month) = ParseMonth(command, timeZoneId);
-        if (parts.Length < 2)
-            return (new DateOnly(year, month, 1), new DateOnly(year, month, 1).AddMonths(1).AddDays(-1));
-        return (new DateOnly(year, month, 1), new DateOnly(year, month, 1).AddMonths(1).AddDays(-1));
+        var token = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        if (token is null || !token.StartsWith('/'))
+            return null;
+
+        return token.Split('@')[0].ToLowerInvariant();
     }
 
-    private static (int Year, int Month) ParseMonth(string command, string timeZoneId)
+    private static bool TryParseMonth(string command, string timeZoneId, out int year, out int month)
     {
         var parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length > 1 && DateOnly.TryParseExact(parts[1], "yyyy-MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out var selected))
-            return (selected.Year, selected.Month);
+        if (parts.Length == 1)
+        {
+            var localDate = LocalDate(timeZoneId);
+            year = localDate.Year;
+            month = localDate.Month;
+            return true;
+        }
 
-        var localDate = LocalDate(timeZoneId);
-        return (localDate.Year, localDate.Month);
+        if (parts.Length == 2)
+            return UserInputParser.TryParseYearMonth(parts[1], out year, out month);
+
+        year = 0;
+        month = 0;
+        return false;
     }
 
     private static string FormatStatistics(int year, int month, IReadOnlyList<MonthlyStatisticsCurrency> statistics)

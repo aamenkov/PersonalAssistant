@@ -1,8 +1,8 @@
 # Текущая задача
 
-## Номер
+## ID задачи
 
-NNN
+NNN или TD-NNN
 
 ## Этап
 
@@ -10,7 +10,7 @@ NNN
 
 ## Ветка
 
-`codex/NNN-short-name`
+`codex/<ID>-short-name`
 
 ## Цель
 
@@ -27,4 +27,4 @@ NNN
 
 - Сборка и тесты проходят.
 - Поведение соответствует требованиям.
-- Перед Pull Request файл перемещен в `docs/tasks/NNN-short-name.md`.
+- Перед Pull Request файл перемещен в `docs/tasks/<ID>-short-name.md`.

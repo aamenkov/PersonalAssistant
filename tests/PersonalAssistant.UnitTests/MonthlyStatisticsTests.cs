@@ -19,6 +19,8 @@ public sealed class MonthlyStatisticsTests
         inactive.Deactivate(DateTime.UtcNow);
         repository.Items.AddRange([rub, usd, inactive]);
         rub.RecordPayment(90, new DateOnly(2026, 8, 15), "2026-08-15", null, DateTime.UtcNow);
+        rub.UpdateDetails("Internet", 150, "RUB", 1, RecurrenceUnit.Month, rub.NextPaymentDate!.Value,
+            PaymentMethod.Card, false, null, DateTime.UtcNow);
 
         var statistics = await new PaymentService(repository).GetMonthlyStatisticsAsync(userId, 2026, 8, CancellationToken.None);
 

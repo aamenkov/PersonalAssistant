@@ -21,6 +21,39 @@ public interface IConversationStateRepository
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }
 
+public static class UserInputParser
+{
+    public static bool TryParsePositiveAmount(string input, out decimal amount)
+    {
+        amount = 0;
+        var normalized = input.Trim();
+        if (normalized.Contains('.') && normalized.Contains(','))
+            return false;
+
+        normalized = normalized.Replace(',', '.');
+        return decimal.TryParse(
+            normalized,
+            NumberStyles.AllowDecimalPoint | NumberStyles.AllowLeadingSign,
+            CultureInfo.InvariantCulture,
+            out amount)
+            && amount > 0;
+    }
+
+    public static bool TryParseYearMonth(string input, out int year, out int month)
+    {
+        if (DateTime.TryParseExact(input.Trim(), "yyyy-MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out var selected))
+        {
+            year = selected.Year;
+            month = selected.Month;
+            return true;
+        }
+
+        year = 0;
+        month = 0;
+        return false;
+    }
+}
+
 public sealed record PaymentListItem(Guid Id, string Name, decimal Amount, string Currency, DateOnly DueDate, RecurrenceUnit RecurrenceUnit, PaymentMethod PaymentMethod, bool IsAutoDebit);
 
 public sealed record PaymentDetails(
@@ -177,7 +210,7 @@ public sealed class PaymentService(IPaymentRepository payments)
                 continue;
 
             var current = planned.GetValueOrDefault(transaction.Currency);
-            planned[transaction.Currency] = (current.Amount + transaction.RecurringPayment.Amount, current.Count + 1);
+            planned[transaction.Currency] = (current.Amount + transaction.ExpectedAmount, current.Count + 1);
         }
 
         var paid = transactions.GroupBy(x => x.Currency, StringComparer.OrdinalIgnoreCase)
@@ -204,7 +237,7 @@ public sealed class PaymentConversationService(
         var existing = await states.FindAsync(userId, cancellationToken);
         var payload = JsonSerializer.Serialize(new PaymentDraftState());
         if (existing is not null)
-            existing.UpdatePayload(payload, DateTime.UtcNow);
+            existing.Reset(ConversationKind.AddPayment, payload, DateTime.UtcNow);
         else
             await states.AddAsync(ConversationState.Create(userId, ConversationKind.AddPayment, payload, DateTime.UtcNow), cancellationToken);
         await states.SaveChangesAsync(cancellationToken);
@@ -229,7 +262,7 @@ public sealed class PaymentConversationService(
                 draft.Step = PaymentDraftStep.Amount;
                 break;
             case PaymentDraftStep.Amount:
-                if (!decimal.TryParse(input, NumberStyles.Number, CultureInfo.InvariantCulture, out var amount) || amount <= 0)
+                if (!UserInputParser.TryParsePositiveAmount(input, out var amount))
                     return "Введите положительную сумму, например `30.50`:";
                 draft.Amount = amount;
                 draft.Step = PaymentDraftStep.Currency;
@@ -262,9 +295,8 @@ public sealed class PaymentConversationService(
                 if (!input.Equals("да", StringComparison.OrdinalIgnoreCase) && !input.Equals("yes", StringComparison.OrdinalIgnoreCase))
                     return "Введите `да` для сохранения или `нет` для отмены:";
 
-                await payments.CreateAsync(userId, draft.Name!, draft.Amount!.Value, draft.Currency!, 1, draft.RecurrenceUnit!.Value, draft.NextPaymentDate!.Value, cancellationToken);
                 states.Remove(state);
-                await states.SaveChangesAsync(cancellationToken);
+                await payments.CreateAsync(userId, draft.Name!, draft.Amount!.Value, draft.Currency!, 1, draft.RecurrenceUnit!.Value, draft.NextPaymentDate!.Value, cancellationToken);
                 return "Платеж сохранен. Используйте /payments для просмотра.";
         }
 
@@ -329,7 +361,7 @@ public sealed class PaymentEditConversationService(
         var existing = await states.FindAsync(userId, cancellationToken);
         var payload = JsonSerializer.Serialize(draft);
         if (existing is not null)
-            existing.UpdatePayload(payload, DateTime.UtcNow);
+            existing.Reset(ConversationKind.EditPayment, payload, DateTime.UtcNow);
         else
             await states.AddAsync(ConversationState.Create(userId, ConversationKind.EditPayment, payload, DateTime.UtcNow), cancellationToken);
         await states.SaveChangesAsync(cancellationToken);
@@ -367,7 +399,7 @@ public sealed class PaymentEditConversationService(
             case PaymentEditStep.Amount:
                 if (input != "-")
                 {
-                    if (!decimal.TryParse(input, NumberStyles.Number, CultureInfo.InvariantCulture, out var amount) || amount <= 0)
+                    if (!UserInputParser.TryParsePositiveAmount(input, out var amount))
                         return "Введите положительную сумму, например `35.50`, или `-`, чтобы оставить текущую:";
                     draft.Amount = amount;
                 }
@@ -444,10 +476,9 @@ public sealed class PaymentEditConversationService(
 
                 var updated = new PaymentDetails(draft.PaymentId, draft.Name!, draft.Amount!.Value, draft.Currency!, draft.RecurrenceInterval,
                     draft.RecurrenceUnit!.Value, draft.NextPaymentDate!.Value, draft.PaymentMethod!.Value, draft.IsAutoDebit!.Value, draft.Description);
+                states.Remove(state);
                 if (!await payments.UpdateAsync(userId, draft.PaymentId, updated, cancellationToken))
                     return "Платеж не найден или уже отключен.";
-                states.Remove(state);
-                await states.SaveChangesAsync(cancellationToken);
                 return "Платеж обновлен. История оплат не изменена.";
         }
 
@@ -553,7 +584,7 @@ public sealed class PaymentRecordConversationService(
     IConversationStateRepository states,
     PaymentService payments)
 {
-    public async Task<string> BeginAsync(Guid userId, Guid paymentId, CancellationToken cancellationToken)
+    public async Task<string> BeginAsync(Guid userId, Guid paymentId, DateOnly localToday, CancellationToken cancellationToken)
     {
         var payment = await payments.GetDetailsAsync(userId, paymentId, cancellationToken);
         if (payment is null)
@@ -564,13 +595,13 @@ public sealed class PaymentRecordConversationService(
             PaymentId = payment.Id,
             ExpectedAmount = payment.Amount,
             PaidAmount = payment.Amount,
-            PaidDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            PaidDate = localToday,
             Step = PaymentRecordStep.Amount
         };
         var existing = await states.FindAsync(userId, cancellationToken);
         var payload = JsonSerializer.Serialize(draft);
         if (existing is not null)
-            existing.UpdatePayload(payload, DateTime.UtcNow);
+            existing.Reset(ConversationKind.RecordPayment, payload, DateTime.UtcNow);
         else
             await states.AddAsync(ConversationState.Create(userId, ConversationKind.RecordPayment, payload, DateTime.UtcNow), cancellationToken);
         await states.SaveChangesAsync(cancellationToken);
@@ -598,19 +629,22 @@ public sealed class PaymentRecordConversationService(
         switch (draft.Step)
         {
             case PaymentRecordStep.Amount:
-                if (input != "-" && (!decimal.TryParse(input, NumberStyles.Number, CultureInfo.InvariantCulture, out var amount) || amount <= 0))
+                if (input != "-" && !UserInputParser.TryParsePositiveAmount(input, out _))
                     return "Введите положительную фактическую сумму или `-` для ожидаемой суммы:";
                 if (input != "-")
-                    draft.PaidAmount = decimal.Parse(input, NumberStyles.Number, CultureInfo.InvariantCulture);
+                {
+                    UserInputParser.TryParsePositiveAmount(input, out var amount);
+                    draft.PaidAmount = amount;
+                }
                 draft.Step = PaymentRecordStep.Date;
                 break;
             case PaymentRecordStep.Date:
-                if (input == "-")
-                    draft.PaidDate = DateOnly.FromDateTime(DateTime.UtcNow);
-                else if (!DateOnly.TryParseExact(input, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var paidDate))
-                    return "Введите дату оплаты в формате ГГГГ-ММ-ДД или `-` для сегодняшней даты:";
-                else
+                if (input != "-")
+                {
+                    if (!DateOnly.TryParseExact(input, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var paidDate))
+                        return "Введите дату оплаты в формате ГГГГ-ММ-ДД или `-` для сегодняшней даты:";
                     draft.PaidDate = paidDate;
+                }
                 draft.Step = PaymentRecordStep.Comment;
                 break;
             case PaymentRecordStep.Comment:
@@ -627,11 +661,10 @@ public sealed class PaymentRecordConversationService(
                 if (!input.Equals("да", StringComparison.OrdinalIgnoreCase) && !input.Equals("yes", StringComparison.OrdinalIgnoreCase))
                     return "Введите `да` для сохранения или `нет` для отмены:";
 
+                states.Remove(state);
                 var result = await payments.RecordPaymentAsync(userId, draft.PaymentId, draft.PaidAmount!.Value, draft.PaidDate!.Value, draft.Comment, cancellationToken);
                 if (!result.Success)
                     return "Платеж не найден или уже отключен.";
-                states.Remove(state);
-                await states.SaveChangesAsync(cancellationToken);
                 return result.IsOneTime
                     ? "Оплата сохранена. Однократный платеж завершен и отключен."
                     : $"Оплата сохранена. Следующая дата: {result.NextPaymentDate:yyyy-MM-dd}.";

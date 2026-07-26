@@ -10,6 +10,9 @@ public static class DependencyInjection
     {
         var connectionString = configuration.GetConnectionString("Postgres")
             ?? throw new InvalidOperationException("ConnectionStrings:Postgres is not configured.");
+        if (string.IsNullOrWhiteSpace(connectionString))
+            throw new InvalidOperationException("ConnectionStrings:Postgres is empty.");
+
         return services.AddDbContext<PersonalAssistantDbContext>(options => options.UseNpgsql(connectionString));
     }
 }
