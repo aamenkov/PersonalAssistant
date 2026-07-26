@@ -26,7 +26,7 @@ tests/
   PersonalAssistant.IntegrationTests
 ```
 
-Подробности находятся в [ARCHITECTURE.md](ARCHITECTURE.md), требования — в [REQUIREMENTS.md](REQUIREMENTS.md), текущая работа — в [TASK.md](TASK.md).
+Подробности находятся в [ARCHITECTURE.md](ARCHITECTURE.md), требования — в [REQUIREMENTS.md](REQUIREMENTS.md), шаблон активной задачи — в [TASK.template.md](TASK.template.md). Активный `TASK.md` создается только внутри рабочей ветки.
 
 ## Конфигурация
 
@@ -46,12 +46,15 @@ docker compose up --build
 
 ## Документация
 
-- [Текущая задача](TASK.md)
+- [Шаблон текущей задачи](TASK.template.md)
 - [Требования](REQUIREMENTS.md)
 - [Архитектура](ARCHITECTURE.md)
 - [Будущие задачи](TODO.md)
 - [Инструкции для AI-агентов](AGENTS.md)
 - [Архив завершенных задач](docs/tasks/001-project-foundation.md)
+- [Задача 002: часовой пояс](docs/tasks/002-timezone-onboarding.md)
+- [Задача 003: переименование проекта](docs/tasks/003-personal-assistant-naming.md)
+- [Задача 004: архив и Git workflow](docs/tasks/004-task-archive-workflow.md)
 
 ## Команды бота
 
