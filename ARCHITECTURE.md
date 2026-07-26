@@ -26,6 +26,8 @@ flowchart LR
 
 Редактирование реализовано через `PaymentEditConversationService`: платеж выбирается callback-кнопкой, а изменения полей сохраняются в том же `ConversationState`. `PaymentService` получает платеж только через owner-scoped запрос, применяет доменный `UpdateDetails` и не затрагивает связанные транзакции. Отключение выполняется через `Deactivate` после отдельного подтверждения и оставляет запись платежа и его историю в базе.
 
+Оплата реализована через `PaymentRecordConversationService`: пользователь выбирает активный платеж, подтверждает фактическую сумму и дату, после чего `PaymentService` вызывает доменное `RecordPayment`. Создается отдельный `PaymentTransaction` с фактической суммой, а у регулярного платежа рассчитывается следующий срок. Однократный платеж деактивируется после записи транзакции. История выбирается через owner-scoped запрос и не зависит от текущих параметров платежа.
+
 ## Связи данных
 
 `User` 1:N `RecurringPayment`; `RecurringPayment` 1:N `PaymentTransaction`; `RecurringPayment` 1:N `Reminder`; `User` 1:1 `ConversationState`. Все запросы платежей включают владельца.

@@ -20,6 +20,7 @@ builder.Services.AddScoped<IConversationStateRepository, ConversationStateReposi
 builder.Services.AddScoped<PaymentService>();
 builder.Services.AddScoped<PaymentConversationService>();
 builder.Services.AddScoped<PaymentEditConversationService>();
+builder.Services.AddScoped<PaymentRecordConversationService>();
 builder.Services.AddSingleton<ITelegramBotClient>(_ =>
     new TelegramBotClient(builder.Configuration["Telegram:BotToken"]
         ?? throw new InvalidOperationException("Telegram:BotToken is not configured.")));
@@ -63,6 +64,16 @@ internal sealed class TelegramPollingService(
             {
                 var editor = scope.ServiceProvider.GetRequiredService<PaymentEditConversationService>();
                 var response = await editor.BeginAsync(user.Id, paymentId, cancellationToken);
+                await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
+                if (update.CallbackQuery.Message is { } message)
+                    await client.SendMessage(message.Chat.Id, response, cancellationToken: cancellationToken);
+                return;
+            }
+
+            if (parts[1] == "pay")
+            {
+                var recorder = scope.ServiceProvider.GetRequiredService<PaymentRecordConversationService>();
+                var response = await recorder.BeginAsync(user.Id, paymentId, cancellationToken);
                 await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
                 if (update.CallbackQuery.Message is { } message)
                     await client.SendMessage(message.Chat.Id, response, cancellationToken: cancellationToken);
@@ -162,7 +173,7 @@ internal sealed class TelegramPollingService(
             var items = await payments.GetActiveAsync(user.Id, isUpcoming ? today : null, isUpcoming ? today.AddDays(7) : null, cancellationToken);
             await client.SendMessage(update.Message.Chat.Id, FormatPayments(items, isUpcoming), cancellationToken: cancellationToken);
         }
-        else if (text.StartsWith("/edit", StringComparison.OrdinalIgnoreCase) || text.StartsWith("/disable", StringComparison.OrdinalIgnoreCase))
+        else if (text.StartsWith("/edit", StringComparison.OrdinalIgnoreCase) || text.StartsWith("/disable", StringComparison.OrdinalIgnoreCase) || text.StartsWith("/pay", StringComparison.OrdinalIgnoreCase))
         {
             using var scope = scopeFactory.CreateScope();
             var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
@@ -176,14 +187,32 @@ internal sealed class TelegramPollingService(
             var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
             var items = await payments.GetActiveAsync(user.Id, null, null, cancellationToken);
             var isEdit = text.StartsWith("/edit", StringComparison.OrdinalIgnoreCase);
+            var isPay = text.StartsWith("/pay", StringComparison.OrdinalIgnoreCase);
             if (items.Count == 0)
             {
                 await client.SendMessage(update.Message.Chat.Id, "Активных платежей пока нет.", cancellationToken: cancellationToken);
                 return;
             }
 
-            await client.SendMessage(update.Message.Chat.Id, isEdit ? "Выберите платеж для редактирования:" : "Выберите платеж для отключения:",
-                replyMarkup: PaymentActionKeyboard(items, isEdit ? "edit" : "disable"), cancellationToken: cancellationToken);
+            var action = isEdit ? "edit" : isPay ? "pay" : "disable";
+            var prompt = isEdit ? "Выберите платеж для редактирования:" : isPay ? "Выберите оплаченный платеж:" : "Выберите платеж для отключения:";
+            await client.SendMessage(update.Message.Chat.Id, prompt,
+                replyMarkup: PaymentActionKeyboard(items, action), cancellationToken: cancellationToken);
+        }
+        else if (text.StartsWith("/history", StringComparison.OrdinalIgnoreCase))
+        {
+            using var scope = scopeFactory.CreateScope();
+            var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+            var user = await users.FindByTelegramUserIdAsync(from.Id, cancellationToken);
+            if (user is null)
+            {
+                await client.SendMessage(update.Message.Chat.Id, "Сначала выполните /start.", cancellationToken: cancellationToken);
+                return;
+            }
+
+            var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
+            var history = await payments.GetHistoryAsync(user.Id, null, null, null, cancellationToken);
+            await client.SendMessage(update.Message.Chat.Id, FormatHistory(history), cancellationToken: cancellationToken);
         }
         else if (text.StartsWith("/settings", StringComparison.OrdinalIgnoreCase))
         {
@@ -192,7 +221,7 @@ internal sealed class TelegramPollingService(
         }
         else if (text.StartsWith("/help", StringComparison.OrdinalIgnoreCase))
         {
-            await client.SendMessage(update.Message.Chat.Id, "Доступные команды:\n/start — регистрация и выбор часового пояса\n/settings — изменить часовой пояс\n/add — добавить платеж\n/payments — все активные платежи\n/upcoming — платежи на ближайшие 7 дней\n/edit — изменить платеж\n/disable — отключить платеж\n/help — справка", cancellationToken: cancellationToken);
+            await client.SendMessage(update.Message.Chat.Id, "Доступные команды:\n/start — регистрация и выбор часового пояса\n/settings — изменить часовой пояс\n/add — добавить платеж\n/payments — все активные платежи\n/upcoming — платежи на ближайшие 7 дней\n/edit — изменить платеж\n/disable — отключить платеж\n/pay — отметить оплату\n/history — история оплат\n/help — справка", cancellationToken: cancellationToken);
         }
         else
         {
@@ -202,8 +231,9 @@ internal sealed class TelegramPollingService(
             if (user is null)
                 return;
 
-            var conversations = scope.ServiceProvider.GetRequiredService<PaymentConversationService>();
-            var response = await conversations.HandleInputAsync(user.Id, text, cancellationToken);
+            var response = await scope.ServiceProvider.GetRequiredService<PaymentConversationService>().HandleInputAsync(user.Id, text, cancellationToken)
+                ?? await scope.ServiceProvider.GetRequiredService<PaymentEditConversationService>().HandleInputAsync(user.Id, text, cancellationToken)
+                ?? await scope.ServiceProvider.GetRequiredService<PaymentRecordConversationService>().HandleInputAsync(user.Id, text, cancellationToken);
             if (response is not null)
                 await client.SendMessage(update.Message.Chat.Id, response, cancellationToken: cancellationToken);
         }
@@ -243,4 +273,13 @@ internal sealed class TelegramPollingService(
         {
             InlineKeyboardButton.WithCallbackData($"{payment.Name} — {payment.Amount:0.##} {payment.Currency}", $"payment:{action}:{payment.Id}")
         }));
+
+    private static string FormatHistory(IReadOnlyList<PaymentTransactionItem> history)
+    {
+        if (history.Count == 0)
+            return "История оплат пока пуста.";
+
+        var lines = history.Select(x => $"• {x.PaidDate:yyyy-MM-dd} — {x.PaymentName}: {x.PaidAmount:0.##} {x.Currency} (период {x.PaidPeriod})");
+        return "История оплат:\n" + string.Join("\n", lines);
+    }
 }

@@ -9,6 +9,7 @@ public interface IPaymentRepository
     Task AddAsync(RecurringPayment payment, CancellationToken cancellationToken);
     Task<RecurringPayment?> FindForOwnerAsync(Guid userId, Guid paymentId, CancellationToken cancellationToken);
     Task<IReadOnlyList<RecurringPayment>> GetActiveAsync(Guid userId, DateOnly? from, DateOnly? to, CancellationToken cancellationToken);
+    Task<IReadOnlyList<PaymentTransaction>> GetTransactionsForOwnerAsync(Guid userId, Guid? paymentId, DateOnly? from, DateOnly? to, CancellationToken cancellationToken);
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }
 
@@ -33,6 +34,8 @@ public sealed record PaymentDetails(
     PaymentMethod PaymentMethod,
     bool IsAutoDebit,
     string? Description);
+
+public sealed record PaymentTransactionItem(Guid PaymentId, string PaymentName, decimal PaidAmount, string Currency, DateOnly PaidDate, string PaidPeriod, string? Comment);
 
 public sealed class PaymentService(IPaymentRepository payments)
 {
@@ -91,6 +94,33 @@ public sealed class PaymentService(IPaymentRepository payments)
         payment.Deactivate(DateTime.UtcNow);
         await payments.SaveChangesAsync(cancellationToken);
         return true;
+    }
+
+    public async Task<(bool Success, bool IsOneTime, DateOnly? NextPaymentDate)> RecordPaymentAsync(
+        Guid userId,
+        Guid paymentId,
+        decimal paidAmount,
+        DateOnly paidDate,
+        string? comment,
+        CancellationToken cancellationToken)
+    {
+        var payment = await payments.FindForOwnerAsync(userId, paymentId, cancellationToken);
+        if (payment is null || !payment.IsActive || !payment.NextPaymentDate.HasValue)
+            return (false, false, null);
+
+        var dueDate = payment.NextPaymentDate.Value;
+        payment.RecordPayment(paidAmount, paidDate, dueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), comment, DateTime.UtcNow);
+        await payments.SaveChangesAsync(cancellationToken);
+        return (true, payment.RecurrenceUnit == RecurrenceUnit.Once, payment.NextPaymentDate);
+    }
+
+    public async Task<IReadOnlyList<PaymentTransactionItem>> GetHistoryAsync(Guid userId, Guid? paymentId, DateOnly? from, DateOnly? to, CancellationToken cancellationToken)
+    {
+        var entities = await payments.GetTransactionsForOwnerAsync(userId, paymentId, from, to, cancellationToken);
+        return entities.OrderByDescending(x => x.PaidDate)
+            .Select(x => new PaymentTransactionItem(x.RecurringPaymentId, x.RecurringPayment.Name, x.PaidAmount,
+                x.RecurringPayment.Currency, x.PaidDate, x.PaidPeriod, x.Comment))
+            .ToList();
     }
 }
 
@@ -444,6 +474,124 @@ public sealed class PaymentEditConversationService(
         PaymentMethod,
         AutoDebit,
         Description,
+        Confirmation
+    }
+}
+
+public sealed class PaymentRecordConversationService(
+    IConversationStateRepository states,
+    PaymentService payments)
+{
+    public async Task<string> BeginAsync(Guid userId, Guid paymentId, CancellationToken cancellationToken)
+    {
+        var payment = await payments.GetDetailsAsync(userId, paymentId, cancellationToken);
+        if (payment is null)
+            return "Платеж не найден или уже отключен.";
+
+        var draft = new PaymentRecordDraft
+        {
+            PaymentId = payment.Id,
+            ExpectedAmount = payment.Amount,
+            PaidAmount = payment.Amount,
+            PaidDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            Step = PaymentRecordStep.Amount
+        };
+        var existing = await states.FindAsync(userId, cancellationToken);
+        var payload = JsonSerializer.Serialize(draft);
+        if (existing is not null)
+            existing.UpdatePayload(payload, DateTime.UtcNow);
+        else
+            await states.AddAsync(ConversationState.Create(userId, ConversationKind.RecordPayment, payload, DateTime.UtcNow), cancellationToken);
+        await states.SaveChangesAsync(cancellationToken);
+        return $"Платеж: {payment.Name}. Введите фактическую сумму ({payment.Amount:0.##} {payment.Currency}) или `-`, чтобы использовать ожидаемую:";
+    }
+
+    public async Task<string?> HandleInputAsync(Guid userId, string input, CancellationToken cancellationToken)
+    {
+        var state = await states.FindAsync(userId, cancellationToken);
+        if (state is null || state.Kind != ConversationKind.RecordPayment)
+            return null;
+
+        input = input.Trim();
+        if (input.Equals("отмена", StringComparison.OrdinalIgnoreCase) || input.Equals("cancel", StringComparison.OrdinalIgnoreCase))
+        {
+            states.Remove(state);
+            await states.SaveChangesAsync(cancellationToken);
+            return "Отметка оплаты отменена.";
+        }
+
+        var draft = JsonSerializer.Deserialize<PaymentRecordDraft>(state.PayloadJson);
+        if (draft is null)
+            return "Не удалось восстановить оплату. Запустите /pay заново.";
+
+        switch (draft.Step)
+        {
+            case PaymentRecordStep.Amount:
+                if (input != "-" && (!decimal.TryParse(input, NumberStyles.Number, CultureInfo.InvariantCulture, out var amount) || amount <= 0))
+                    return "Введите положительную фактическую сумму или `-` для ожидаемой суммы:";
+                if (input != "-")
+                    draft.PaidAmount = decimal.Parse(input, NumberStyles.Number, CultureInfo.InvariantCulture);
+                draft.Step = PaymentRecordStep.Date;
+                break;
+            case PaymentRecordStep.Date:
+                if (input == "-")
+                    draft.PaidDate = DateOnly.FromDateTime(DateTime.UtcNow);
+                else if (!DateOnly.TryParseExact(input, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var paidDate))
+                    return "Введите дату оплаты в формате ГГГГ-ММ-ДД или `-` для сегодняшней даты:";
+                else
+                    draft.PaidDate = paidDate;
+                draft.Step = PaymentRecordStep.Comment;
+                break;
+            case PaymentRecordStep.Comment:
+                draft.Comment = input == "-" ? null : input;
+                draft.Step = PaymentRecordStep.Confirmation;
+                break;
+            case PaymentRecordStep.Confirmation:
+                if (input.Equals("нет", StringComparison.OrdinalIgnoreCase) || input.Equals("no", StringComparison.OrdinalIgnoreCase))
+                {
+                    states.Remove(state);
+                    await states.SaveChangesAsync(cancellationToken);
+                    return "Отметка оплаты отменена.";
+                }
+                if (!input.Equals("да", StringComparison.OrdinalIgnoreCase) && !input.Equals("yes", StringComparison.OrdinalIgnoreCase))
+                    return "Введите `да` для сохранения или `нет` для отмены:";
+
+                var result = await payments.RecordPaymentAsync(userId, draft.PaymentId, draft.PaidAmount!.Value, draft.PaidDate!.Value, draft.Comment, cancellationToken);
+                if (!result.Success)
+                    return "Платеж не найден или уже отключен.";
+                states.Remove(state);
+                await states.SaveChangesAsync(cancellationToken);
+                return result.IsOneTime
+                    ? "Оплата сохранена. Однократный платеж завершен и отключен."
+                    : $"Оплата сохранена. Следующая дата: {result.NextPaymentDate:yyyy-MM-dd}.";
+        }
+
+        state.UpdatePayload(JsonSerializer.Serialize(draft), DateTime.UtcNow);
+        await states.SaveChangesAsync(cancellationToken);
+        return draft.Step switch
+        {
+            PaymentRecordStep.Date => "Введите дату оплаты в формате ГГГГ-ММ-ДД или `-` для сегодняшней даты:",
+            PaymentRecordStep.Comment => "Введите комментарий или `-`, если комментарий не нужен:",
+            PaymentRecordStep.Confirmation => $"Проверьте оплату:\nСумма: {draft.PaidAmount:0.##}\nДата: {draft.PaidDate:yyyy-MM-dd}\nКомментарий: {draft.Comment ?? "нет"}\n\nСохранить? Введите да или нет.",
+            _ => "Введите фактическую сумму или `-` для ожидаемой суммы:"
+        };
+    }
+
+    private sealed class PaymentRecordDraft
+    {
+        public Guid PaymentId { get; set; }
+        public decimal? ExpectedAmount { get; set; }
+        public decimal? PaidAmount { get; set; }
+        public DateOnly? PaidDate { get; set; }
+        public string? Comment { get; set; }
+        public PaymentRecordStep Step { get; set; }
+    }
+
+    private enum PaymentRecordStep
+    {
+        Amount,
+        Date,
+        Comment,
         Confirmation
     }
 }

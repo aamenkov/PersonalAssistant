@@ -36,6 +36,12 @@ public sealed class PaymentServiceTests
         public Task<IReadOnlyList<RecurringPayment>> GetActiveAsync(Guid userId, DateOnly? from, DateOnly? to, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<RecurringPayment>>(Items.Where(x => x.UserId == userId).ToList());
 
+        public Task<IReadOnlyList<PaymentTransaction>> GetTransactionsForOwnerAsync(Guid userId, Guid? paymentId, DateOnly? from, DateOnly? to, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<PaymentTransaction>>(Items.Where(x => x.UserId == userId)
+                .SelectMany(x => x.Transactions)
+                .Where(x => !paymentId.HasValue || x.RecurringPaymentId == paymentId.Value)
+                .ToList());
+
         public Task SaveChangesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }
