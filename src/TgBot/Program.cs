@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
@@ -211,8 +212,25 @@ internal sealed class TelegramPollingService(
             }
 
             var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
-            var history = await payments.GetHistoryAsync(user.Id, null, null, null, cancellationToken);
+            var (startDate, endDate) = ParseMonthRange(text, user.TimeZoneId);
+            var history = await payments.GetHistoryAsync(user.Id, null, startDate, endDate, cancellationToken);
             await client.SendMessage(update.Message.Chat.Id, FormatHistory(history), cancellationToken: cancellationToken);
+        }
+        else if (text.StartsWith("/stats", StringComparison.OrdinalIgnoreCase))
+        {
+            using var scope = scopeFactory.CreateScope();
+            var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+            var user = await users.FindByTelegramUserIdAsync(from.Id, cancellationToken);
+            if (user is null)
+            {
+                await client.SendMessage(update.Message.Chat.Id, "Сначала выполните /start.", cancellationToken: cancellationToken);
+                return;
+            }
+
+            var (year, month) = ParseMonth(text, user.TimeZoneId);
+            var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
+            var statistics = await payments.GetMonthlyStatisticsAsync(user.Id, year, month, cancellationToken);
+            await client.SendMessage(update.Message.Chat.Id, FormatStatistics(year, month, statistics), cancellationToken: cancellationToken);
         }
         else if (text.StartsWith("/settings", StringComparison.OrdinalIgnoreCase))
         {
@@ -221,7 +239,7 @@ internal sealed class TelegramPollingService(
         }
         else if (text.StartsWith("/help", StringComparison.OrdinalIgnoreCase))
         {
-            await client.SendMessage(update.Message.Chat.Id, "Доступные команды:\n/start — регистрация и выбор часового пояса\n/settings — изменить часовой пояс\n/add — добавить платеж\n/payments — все активные платежи\n/upcoming — платежи на ближайшие 7 дней\n/edit — изменить платеж\n/disable — отключить платеж\n/pay — отметить оплату\n/history — история оплат\n/help — справка", cancellationToken: cancellationToken);
+            await client.SendMessage(update.Message.Chat.Id, "Доступные команды:\n/start — регистрация и выбор часового пояса\n/settings — изменить часовой пояс\n/add — добавить платеж\n/payments — все активные платежи\n/upcoming — платежи на ближайшие 7 дней\n/edit — изменить платеж\n/disable — отключить платеж\n/pay — отметить оплату\n/history [YYYY-MM] — история оплат\n/stats [YYYY-MM] — статистика месяца\n/help — справка", cancellationToken: cancellationToken);
         }
         else
         {
@@ -281,5 +299,38 @@ internal sealed class TelegramPollingService(
 
         var lines = history.Select(x => $"• {x.PaidDate:yyyy-MM-dd} — {x.PaymentName}: {x.PaidAmount:0.##} {x.Currency} (период {x.PaidPeriod})");
         return "История оплат:\n" + string.Join("\n", lines);
+    }
+
+    private static (DateOnly? From, DateOnly? To) ParseMonthRange(string command, string timeZoneId)
+    {
+        var parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var (year, month) = ParseMonth(command, timeZoneId);
+        if (parts.Length < 2)
+            return (new DateOnly(year, month, 1), new DateOnly(year, month, 1).AddMonths(1).AddDays(-1));
+        return (new DateOnly(year, month, 1), new DateOnly(year, month, 1).AddMonths(1).AddDays(-1));
+    }
+
+    private static (int Year, int Month) ParseMonth(string command, string timeZoneId)
+    {
+        var parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length > 1 && DateOnly.TryParseExact(parts[1], "yyyy-MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out var selected))
+            return (selected.Year, selected.Month);
+
+        var localDate = LocalDate(timeZoneId);
+        return (localDate.Year, localDate.Month);
+    }
+
+    private static string FormatStatistics(int year, int month, IReadOnlyList<MonthlyStatisticsCurrency> statistics)
+    {
+        if (statistics.Count == 0)
+            return $"Статистика за {year:D4}-{month:D2}: платежей и оплат нет.";
+
+        var lines = statistics.Select(x =>
+            $"{x.Currency}:\n" +
+            $"  Запланировано: {x.PlannedAmount:0.##} ({x.PlannedCount})\n" +
+            $"  Оплачено: {x.PaidAmount:0.##} ({x.PaidCount})\n" +
+            $"  Осталось: {x.RemainingAmount:0.##}\n" +
+            $"  Не оплачено платежей: {x.UnpaidCount}");
+        return $"Статистика за {year:D4}-{month:D2}:\n" + string.Join("\n", lines);
     }
 }
