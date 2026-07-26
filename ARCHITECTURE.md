@@ -22,6 +22,8 @@ flowchart LR
 
 Регистрация и настройка профиля реализованы через `UserRegistrationService` и `UserTimeZoneService`; Telegram-обработчик только переводит Update в вызов application-сервиса.
 
+Создание платежа реализовано через `PaymentConversationService`: каждый шаг сериализуется в `ConversationState.PayloadJson`, поэтому диалог не теряется после перезапуска. `PaymentService` создает платеж только с переданным `UserId`, а `PaymentRepository` фильтрует выборки по владельцу и активности.
+
 ## Связи данных
 
 `User` 1:N `RecurringPayment`; `RecurringPayment` 1:N `PaymentTransaction`; `RecurringPayment` 1:N `Reminder`; `User` 1:1 `ConversationState`. Все запросы платежей включают владельца.

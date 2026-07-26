@@ -68,3 +68,36 @@ public sealed class UserRepository(PersonalAssistantDbContext db) : IUserReposit
 
     public Task SaveChangesAsync(CancellationToken cancellationToken) => db.SaveChangesAsync(cancellationToken);
 }
+
+public sealed class PaymentRepository(PersonalAssistantDbContext db) : IPaymentRepository
+{
+    public Task AddAsync(RecurringPayment payment, CancellationToken cancellationToken) => db.RecurringPayments.AddAsync(payment, cancellationToken).AsTask();
+
+    public async Task<IReadOnlyList<RecurringPayment>> GetActiveAsync(Guid userId, DateOnly? from, DateOnly? to, CancellationToken cancellationToken)
+    {
+        var query = db.RecurringPayments
+            .AsNoTracking()
+            .Where(x => x.UserId == userId && x.IsActive);
+
+        if (from.HasValue)
+            query = query.Where(x => x.NextPaymentDate >= from.Value);
+        if (to.HasValue)
+            query = query.Where(x => x.NextPaymentDate <= to.Value);
+
+        return await query.OrderBy(x => x.NextPaymentDate).ToListAsync(cancellationToken);
+    }
+
+    public Task SaveChangesAsync(CancellationToken cancellationToken) => db.SaveChangesAsync(cancellationToken);
+}
+
+public sealed class ConversationStateRepository(PersonalAssistantDbContext db) : IConversationStateRepository
+{
+    public Task<ConversationState?> FindAsync(Guid userId, CancellationToken cancellationToken) =>
+        db.ConversationStates.SingleOrDefaultAsync(x => x.UserId == userId, cancellationToken);
+
+    public Task AddAsync(ConversationState state, CancellationToken cancellationToken) => db.ConversationStates.AddAsync(state, cancellationToken).AsTask();
+
+    public void Remove(ConversationState state) => db.ConversationStates.Remove(state);
+
+    public Task SaveChangesAsync(CancellationToken cancellationToken) => db.SaveChangesAsync(cancellationToken);
+}

@@ -51,6 +51,39 @@ public sealed class RecurringPayment
 {
     private RecurringPayment() { }
 
+    public static RecurringPayment Create(
+        Guid userId,
+        string name,
+        decimal amount,
+        string currency,
+        int recurrenceInterval,
+        RecurrenceUnit recurrenceUnit,
+        DateOnly nextPaymentDate,
+        DateTime createdAtUtc)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("Payment name is required.", nameof(name));
+        if (amount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(amount), "Payment amount must be greater than zero.");
+        if (string.IsNullOrWhiteSpace(currency) || currency.Length != 3)
+            throw new ArgumentException("Currency must be a three-letter code.", nameof(currency));
+        if (recurrenceInterval <= 0)
+            throw new ArgumentOutOfRangeException(nameof(recurrenceInterval));
+
+        return new RecurringPayment
+        {
+            UserId = userId,
+            Name = name.Trim(),
+            Amount = amount,
+            Currency = currency.Trim().ToUpperInvariant(),
+            RecurrenceInterval = recurrenceInterval,
+            RecurrenceUnit = recurrenceUnit,
+            NextPaymentDate = nextPaymentDate,
+            CreatedAtUtc = createdAtUtc,
+            UpdatedAtUtc = createdAtUtc
+        };
+    }
+
     public Guid Id { get; private set; } = Guid.NewGuid();
     public Guid UserId { get; private set; }
     public User User { get; private set; } = null!;
@@ -100,6 +133,20 @@ public sealed class Reminder
 public sealed class ConversationState
 {
     private ConversationState() { }
+
+    public static ConversationState Create(Guid userId, ConversationKind kind, string payloadJson, DateTime updatedAtUtc) => new()
+    {
+        UserId = userId,
+        Kind = kind,
+        PayloadJson = payloadJson,
+        UpdatedAtUtc = updatedAtUtc
+    };
+
+    public void UpdatePayload(string payloadJson, DateTime updatedAtUtc)
+    {
+        PayloadJson = payloadJson;
+        UpdatedAtUtc = updatedAtUtc;
+    }
 
     public Guid Id { get; private set; } = Guid.NewGuid();
     public Guid UserId { get; private set; }
