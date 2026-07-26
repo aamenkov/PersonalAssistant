@@ -37,7 +37,8 @@ public sealed class PersonalAssistantDbContext(DbContextOptions<PersonalAssistan
         modelBuilder.Entity<PaymentTransaction>(entity =>
         {
             entity.HasKey(x => x.Id);
-            entity.Property(x => x.PaidAmount).HasPrecision(18, 2);
+        entity.Property(x => x.PaidAmount).HasPrecision(18, 2);
+            entity.Property(x => x.Currency).HasMaxLength(3).IsRequired();
             entity.Property(x => x.PaidPeriod).HasMaxLength(20).IsRequired();
             entity.HasOne(x => x.RecurringPayment).WithMany(x => x.Transactions).HasForeignKey(x => x.RecurringPaymentId).OnDelete(DeleteBehavior.Restrict);
         });
