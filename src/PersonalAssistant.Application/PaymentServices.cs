@@ -275,7 +275,7 @@ public sealed class PaymentConversationService(
                 break;
             case PaymentDraftStep.Recurrence:
                 if (!TryParseRecurrence(input, out var recurrenceUnit))
-                    return "Введите периодичность: `weekly`, `monthly`, `yearly` или `once` (можно по-русски).";
+                    return "Выберите периодичность кнопкой ниже или введите её по-русски:";
                 draft.RecurrenceUnit = recurrenceUnit;
                 draft.Step = PaymentDraftStep.NextPaymentDate;
                 break;
@@ -288,6 +288,8 @@ public sealed class PaymentConversationService(
                 }
                 if (!DateOnly.TryParseExact(input, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var nextDate))
                     return "Введите дату в формате `ГГГГ-ММ-ДД`, например `2026-08-15`:";
+                if (nextDate < draft.Today)
+                    return $"Дата не может быть в прошлом. Укажите дату начиная с {draft.Today:yyyy-MM-dd}:";
                 draft.NextPaymentDate = nextDate;
                 draft.Step = PaymentDraftStep.Confirmation;
                 break;
@@ -301,8 +303,9 @@ public sealed class PaymentConversationService(
                 if (!input.Equals("да", StringComparison.OrdinalIgnoreCase) && !input.Equals("yes", StringComparison.OrdinalIgnoreCase))
                     return "Введите `да` для сохранения или `нет` для отмены:";
 
-                states.Remove(state);
                 await payments.CreateAsync(userId, draft.Name!, draft.Amount!.Value, draft.Currency!, 1, draft.RecurrenceUnit!.Value, draft.NextPaymentDate!.Value, cancellationToken);
+                states.Remove(state);
+                await states.SaveChangesAsync(cancellationToken);
                 return "Платеж сохранен. Используйте /payments для просмотра.";
         }
 
@@ -311,9 +314,9 @@ public sealed class PaymentConversationService(
         return draft.Step switch
         {
             PaymentDraftStep.Amount => "Введите сумму:",
-            PaymentDraftStep.Recurrence => "Введите периодичность: weekly, monthly, yearly или once:",
+            PaymentDraftStep.Recurrence => "Выберите периодичность:",
             PaymentDraftStep.NextPaymentDate => "Выберите «Сегодня» или введите дату следующего платежа в формате ГГГГ-ММ-ДД:",
-            PaymentDraftStep.Confirmation => $"Проверьте платеж:\n{draft.Name} — {draft.Amount:0.##} {draft.Currency}\nДата: {draft.NextPaymentDate:yyyy-MM-dd}\nПериодичность: {draft.RecurrenceUnit}\n\nСохранить? Введите да или нет.",
+            PaymentDraftStep.Confirmation => $"Проверьте платеж:\n{draft.Name} — {draft.Amount:0.##} {draft.Currency}\nДата: {draft.NextPaymentDate:yyyy-MM-dd}\nПериодичность: {PaymentDisplayNames.Recurrence(draft.RecurrenceUnit!.Value)}\n\nСохранить платеж?",
             _ => "Введите название платежа:"
         };
     }
@@ -356,13 +359,13 @@ public sealed class PaymentEditConversationService(
     IConversationStateRepository states,
     PaymentService payments)
 {
-    public async Task<string> BeginAsync(Guid userId, Guid paymentId, CancellationToken cancellationToken)
+    public async Task<string> BeginAsync(Guid userId, Guid paymentId, DateOnly localToday, CancellationToken cancellationToken)
     {
         var payment = await payments.GetDetailsAsync(userId, paymentId, cancellationToken);
         if (payment is null)
             return "Платеж не найден или уже отключен.";
 
-        var draft = PaymentEditDraft.From(payment);
+        var draft = PaymentEditDraft.From(payment, localToday);
         var existing = await states.FindAsync(userId, cancellationToken);
         var payload = JsonSerializer.Serialize(draft);
         if (existing is not null)
@@ -432,7 +435,7 @@ public sealed class PaymentEditConversationService(
                 if (input != "-")
                 {
                     if (!TryParseRecurrence(input, out var recurrenceUnit))
-                        return "Введите weekly, monthly, yearly или once, либо `-`, чтобы оставить текущую:";
+                        return "Выберите периодичность по-русски или `-`, чтобы оставить текущую:";
                     draft.RecurrenceUnit = recurrenceUnit;
                 }
                 draft.Step = PaymentEditStep.NextPaymentDate;
@@ -442,24 +445,30 @@ public sealed class PaymentEditConversationService(
                 {
                     if (!DateOnly.TryParseExact(input, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var nextDate))
                         return "Введите дату в формате ГГГГ-ММ-ДД или `-`, чтобы оставить текущую:";
+                    if (nextDate < draft.Today)
+                        return $"Дата не может быть в прошлом. Укажите дату начиная с {draft.Today:yyyy-MM-dd}:";
                     draft.NextPaymentDate = nextDate;
                 }
                 draft.Step = PaymentEditStep.PaymentMethod;
                 break;
             case PaymentEditStep.PaymentMethod:
+                if (input.Equals("оставить текущий", StringComparison.OrdinalIgnoreCase))
+                    input = "-";
                 if (input != "-")
                 {
                     if (!TryParsePaymentMethod(input, out var method))
-                        return "Введите card, bank, cash или other, либо `-`, чтобы оставить текущий способ:";
+                        return "Выберите способ оплаты по-русски или `-`, чтобы оставить текущий:";
                     draft.PaymentMethod = method;
                 }
                 draft.Step = PaymentEditStep.AutoDebit;
                 break;
             case PaymentEditStep.AutoDebit:
+                if (input.Equals("оставить текущее", StringComparison.OrdinalIgnoreCase))
+                    input = "-";
                 if (input != "-")
                 {
                     if (!TryParseBoolean(input, out var autoDebit))
-                        return "Введите да/нет или yes/no, либо `-`, чтобы оставить текущее значение:";
+                        return "Введите да или нет, либо `-`, чтобы оставить текущее значение:";
                     draft.IsAutoDebit = autoDebit;
                 }
                 draft.Step = PaymentEditStep.Description;
@@ -481,9 +490,10 @@ public sealed class PaymentEditConversationService(
 
                 var updated = new PaymentDetails(draft.PaymentId, draft.Name!, draft.Amount!.Value, draft.Currency!, draft.RecurrenceInterval,
                     draft.RecurrenceUnit!.Value, draft.NextPaymentDate!.Value, draft.PaymentMethod!.Value, draft.IsAutoDebit!.Value, draft.Description);
-                states.Remove(state);
                 if (!await payments.UpdateAsync(userId, draft.PaymentId, updated, cancellationToken))
                     return "Платеж не найден или уже отключен.";
+                states.Remove(state);
+                await states.SaveChangesAsync(cancellationToken);
                 return "Платеж обновлен. История оплат не изменена.";
         }
 
@@ -498,12 +508,12 @@ public sealed class PaymentEditConversationService(
         PaymentEditStep.Amount => $"Сумма ({draft.Amount:0.##}). Введите новую или `-`:",
         PaymentEditStep.Currency => $"Валюта ({draft.Currency}). Введите новую или `-`:",
         PaymentEditStep.Interval => $"Интервал ({draft.RecurrenceInterval}). Введите новый или `-`:",
-        PaymentEditStep.Recurrence => $"Периодичность ({draft.RecurrenceUnit}). Введите weekly, monthly, yearly или once, либо `-`:",
-        PaymentEditStep.NextPaymentDate => $"Следующая дата ({draft.NextPaymentDate:yyyy-MM-dd}). Введите новую в формате ГГГГ-ММ-ДД или `-`:",
-        PaymentEditStep.PaymentMethod => $"Способ оплаты ({draft.PaymentMethod}). Введите card, bank, cash или other, либо `-`:",
+        PaymentEditStep.Recurrence => $"Периодичность ({PaymentDisplayNames.Recurrence(draft.RecurrenceUnit!.Value)}). Выберите новую или `-`:",
+        PaymentEditStep.NextPaymentDate => $"Следующая дата ({draft.NextPaymentDate:yyyy-MM-dd}). Введите новую дату в формате ГГГГ-ММ-ДД или `-`:",
+        PaymentEditStep.PaymentMethod => $"Способ оплаты ({PaymentDisplayNames.PaymentMethod(draft.PaymentMethod!.Value)}). Выберите новый или `-`:",
         PaymentEditStep.AutoDebit => $"Автосписание ({(draft.IsAutoDebit == true ? "да" : "нет")}). Введите да/нет или `-`:",
         PaymentEditStep.Description => $"Комментарий ({draft.Description ?? "нет"}). Введите новый или `-`, чтобы оставить текущий:",
-        PaymentEditStep.Confirmation => $"Проверьте изменения:\n{draft.Name} — {draft.Amount:0.##} {draft.Currency}\nДата: {draft.NextPaymentDate:yyyy-MM-dd}\nПериодичность: {draft.RecurrenceInterval} {draft.RecurrenceUnit}\nСпособ оплаты: {draft.PaymentMethod}\nАвтосписание: {(draft.IsAutoDebit == true ? "да" : "нет")}\nКомментарий: {draft.Description ?? "нет"}\n\nСохранить? Введите да или нет.",
+        PaymentEditStep.Confirmation => $"Проверьте изменения:\n{draft.Name} — {draft.Amount:0.##} {draft.Currency}\nДата: {draft.NextPaymentDate:yyyy-MM-dd}\nПериодичность: {draft.RecurrenceInterval} {PaymentDisplayNames.Recurrence(draft.RecurrenceUnit!.Value)}\nСпособ оплаты: {PaymentDisplayNames.PaymentMethod(draft.PaymentMethod!.Value)}\nАвтосписание: {(draft.IsAutoDebit == true ? "да" : "нет")}\nКомментарий: {draft.Description ?? "нет"}\n\nСохранить изменения?",
         _ => "Введите новое значение или `отмена` для выхода."
     };
 
@@ -555,7 +565,9 @@ public sealed class PaymentEditConversationService(
         public bool? IsAutoDebit { get; set; }
         public string? Description { get; set; }
 
-        public static PaymentEditDraft From(PaymentDetails payment) => new()
+        public DateOnly Today { get; set; }
+
+        public static PaymentEditDraft From(PaymentDetails payment, DateOnly localToday) => new()
         {
             PaymentId = payment.Id,
             Name = payment.Name,
@@ -566,7 +578,8 @@ public sealed class PaymentEditConversationService(
             NextPaymentDate = payment.NextPaymentDate,
             PaymentMethod = payment.PaymentMethod,
             IsAutoDebit = payment.IsAutoDebit,
-            Description = payment.Description
+            Description = payment.Description,
+            Today = localToday
         };
     }
 
@@ -650,7 +663,7 @@ public sealed class PaymentRecordConversationService(
                 else if (input != "-")
                 {
                     if (!DateOnly.TryParseExact(input, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var paidDate))
-                        return "Введите дату оплаты в формате ГГГГ-ММ-ДД или `-` для сегодняшней даты:";
+                        return "Введите дату оплаты в формате ГГГГ-ММ-ДД или выберите сегодняшнюю дату:";
                     draft.PaidDate = paidDate;
                 }
                 draft.Step = PaymentRecordStep.Comment;
@@ -669,10 +682,11 @@ public sealed class PaymentRecordConversationService(
                 if (!input.Equals("да", StringComparison.OrdinalIgnoreCase) && !input.Equals("yes", StringComparison.OrdinalIgnoreCase))
                     return "Введите `да` для сохранения или `нет` для отмены:";
 
-                states.Remove(state);
                 var result = await payments.RecordPaymentAsync(userId, draft.PaymentId, draft.PaidAmount!.Value, draft.PaidDate!.Value, draft.Comment, cancellationToken);
                 if (!result.Success)
                     return "Платеж не найден или уже отключен.";
+                states.Remove(state);
+                await states.SaveChangesAsync(cancellationToken);
                 return result.IsOneTime
                     ? "Оплата сохранена. Однократный платеж завершен и отключен."
                     : $"Оплата сохранена. Следующая дата: {result.NextPaymentDate:yyyy-MM-dd}.";
@@ -684,7 +698,7 @@ public sealed class PaymentRecordConversationService(
         {
             PaymentRecordStep.Date => "Выберите «Сегодня» или введите дату оплаты в формате ГГГГ-ММ-ДД:",
             PaymentRecordStep.Comment => "Введите комментарий или `-`, если комментарий не нужен:",
-            PaymentRecordStep.Confirmation => $"Проверьте оплату:\nСумма: {draft.PaidAmount:0.##}\nДата: {draft.PaidDate:yyyy-MM-dd}\nКомментарий: {draft.Comment ?? "нет"}\n\nСохранить? Введите да или нет.",
+            PaymentRecordStep.Confirmation => $"Проверьте оплату:\nСумма: {draft.PaidAmount:0.##}\nДата: {draft.PaidDate:yyyy-MM-dd}\nКомментарий: {draft.Comment ?? "нет"}\n\nСохранить оплату?",
             _ => "Введите фактическую сумму или `-` для ожидаемой суммы:"
         };
     }
