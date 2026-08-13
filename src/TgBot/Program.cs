@@ -231,17 +231,41 @@ internal sealed class TelegramPollingService(
                         await client.SendMessage(currencyMessage.Chat.Id, "Настройка сохранена.", replyMarkup: SettingsKeyboard(updatedUser?.DefaultCurrency ?? parts[2]), cancellationToken: cancellationToken);
                     }
                 }
+                else if (parts[1] == "days" && parts.Length == 3 && parts[2] == "menu")
+                {
+                    await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
+                    if (update.CallbackQuery.Message is { } message)
+                        await client.SendMessage(message.Chat.Id, "Выберите, за сколько дней напоминать:", replyMarkup: ReminderDaysKeyboard(), cancellationToken: cancellationToken);
+                    return;
+                }
                 else if (parts[1] == "days" && parts.Length == 3 && int.TryParse(parts[2], out var days))
                 {
                     var user = await settings.FindAsync(update.CallbackQuery.From.Id, cancellationToken)
                         ?? throw new InvalidOperationException("User is not registered.");
                     await settings.SetReminderSettingsAsync(update.CallbackQuery.From.Id, user.ReminderTimeLocal, days, cancellationToken);
                     await client.AnswerCallbackQuery(update.CallbackQuery.Id, $"Напоминание за {days} дн.", cancellationToken: cancellationToken);
+                    if (update.CallbackQuery.Message is { } daysMessage)
+                    {
+                        var updatedUser = await settings.FindAsync(update.CallbackQuery.From.Id, cancellationToken);
+                        await client.SendMessage(daysMessage.Chat.Id, "Настройка сохранена.", replyMarkup: SettingsKeyboard(updatedUser?.DefaultCurrency ?? "RUB"), cancellationToken: cancellationToken);
+                    }
+                }
+                else if (parts[1] == "time" && parts.Length == 3 && parts[2] == "menu")
+                {
+                    await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
+                    if (update.CallbackQuery.Message is { } message)
+                        await client.SendMessage(message.Chat.Id, "Выберите время напоминаний:", replyMarkup: ReminderTimeKeyboard(), cancellationToken: cancellationToken);
+                    return;
                 }
                 else if (parts[1] == "time" && parts.Length == 4 && TimeOnly.TryParse($"{parts[2]}:{parts[3]}", out var reminderTime))
                 {
                     await settings.SetReminderTimeAsync(update.CallbackQuery.From.Id, reminderTime, cancellationToken);
                     await client.AnswerCallbackQuery(update.CallbackQuery.Id, $"Время напоминаний: {reminderTime:HH\\:mm}", cancellationToken: cancellationToken);
+                    if (update.CallbackQuery.Message is { } timeMessage)
+                    {
+                        var updatedUser = await settings.FindAsync(update.CallbackQuery.From.Id, cancellationToken);
+                        await client.SendMessage(timeMessage.Chat.Id, "Настройка сохранена.", replyMarkup: SettingsKeyboard(updatedUser?.DefaultCurrency ?? "RUB"), cancellationToken: cancellationToken);
+                    }
                 }
             }
             catch (InvalidOperationException)
@@ -432,9 +456,19 @@ internal sealed class TelegramPollingService(
     {
         new[] { InlineKeyboardButton.WithCallbackData("Изменить часовой пояс", "settings:timezone") },
         new[] { InlineKeyboardButton.WithCallbackData($"Валюта ({currency})", "settings:currency:menu") },
-        new[] { InlineKeyboardButton.WithCallbackData("Напоминать за 1 день", "settings:days:1"), InlineKeyboardButton.WithCallbackData("за 3 дня", "settings:days:3") },
-        new[] { InlineKeyboardButton.WithCallbackData("Напоминать за 7 дней", "settings:days:7") },
-        new[] { InlineKeyboardButton.WithCallbackData("Время: 09:00", "settings:time:09:00"), InlineKeyboardButton.WithCallbackData("12:00", "settings:time:12:00") },
+        new[] { InlineKeyboardButton.WithCallbackData("Дни до напоминания", "settings:days:menu") },
+        new[] { InlineKeyboardButton.WithCallbackData("Время напоминания", "settings:time:menu") }
+    });
+
+    private static InlineKeyboardMarkup ReminderDaysKeyboard() => new(new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("За 1 день", "settings:days:1"), InlineKeyboardButton.WithCallbackData("За 3 дня", "settings:days:3") },
+        new[] { InlineKeyboardButton.WithCallbackData("За 7 дней", "settings:days:7") }
+    });
+
+    private static InlineKeyboardMarkup ReminderTimeKeyboard() => new(new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("09:00", "settings:time:09:00"), InlineKeyboardButton.WithCallbackData("12:00", "settings:time:12:00") },
         new[] { InlineKeyboardButton.WithCallbackData("18:00", "settings:time:18:00") }
     });
 
@@ -462,7 +496,7 @@ internal sealed class TelegramPollingService(
         if (response.Contains("автосписание", StringComparison.OrdinalIgnoreCase))
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Да", "Нет" }, new KeyboardButton[] { "Оставить текущее" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("дату", StringComparison.OrdinalIgnoreCase) || response.Contains("Сегодня", StringComparison.OrdinalIgnoreCase))
-            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Сегодня" }, new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Сегодня", "Завтра" }, new KeyboardButton[] { "Первое число следующего месяца" }, new KeyboardButton[] { "То же число следующего месяца" }, new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("Сохранить", StringComparison.OrdinalIgnoreCase))
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Да", "Нет" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("отмена", StringComparison.OrdinalIgnoreCase))

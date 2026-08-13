@@ -43,6 +43,7 @@ public sealed class PersonalAssistantDbContext(DbContextOptions<PersonalAssistan
             entity.Property(x => x.PaidAmount).HasPrecision(18, 2);
             entity.Property(x => x.Currency).HasMaxLength(3).IsRequired();
             entity.Property(x => x.PaidPeriod).HasMaxLength(20).IsRequired();
+            entity.HasIndex(x => new { x.RecurringPaymentId, x.PaidPeriod }).IsUnique();
             entity.HasOne(x => x.RecurringPayment).WithMany(x => x.Transactions).HasForeignKey(x => x.RecurringPaymentId).OnDelete(DeleteBehavior.Restrict);
         });
 
@@ -111,7 +112,22 @@ public sealed class PaymentRepository(PersonalAssistantDbContext db) : IPaymentR
         return await query.OrderByDescending(x => x.PaidDate).ToListAsync(cancellationToken);
     }
 
-    public Task SaveChangesAsync(CancellationToken cancellationToken) => db.SaveChangesAsync(cancellationToken);
+    public Task<bool> HasTransactionForPeriodAsync(Guid userId, Guid paymentId, string paidPeriod, CancellationToken cancellationToken) =>
+        db.PaymentTransactions.AnyAsync(x => x.RecurringPaymentId == paymentId
+            && x.PaidPeriod == paidPeriod
+            && x.RecurringPayment.UserId == userId, cancellationToken);
+
+    public async Task SaveChangesAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException exception)
+        {
+            throw new PaymentConcurrencyException(exception);
+        }
+    }
 }
 
 public sealed class ConversationStateRepository(PersonalAssistantDbContext db) : IConversationStateRepository

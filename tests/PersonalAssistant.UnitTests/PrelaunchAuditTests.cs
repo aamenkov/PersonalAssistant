@@ -130,5 +130,6 @@ public sealed class PrelaunchAuditTests
             Task.FromResult<IReadOnlyList<PaymentTransaction>>([]);
 
         public Task SaveChangesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<bool> HasTransactionForPeriodAsync(Guid userId, Guid paymentId, string paidPeriod, CancellationToken cancellationToken) => Task.FromResult(false);
     }
 }
