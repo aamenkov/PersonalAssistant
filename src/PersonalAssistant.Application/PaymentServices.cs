@@ -10,6 +10,7 @@ public interface IPaymentRepository
     Task<RecurringPayment?> FindForOwnerAsync(Guid userId, Guid paymentId, CancellationToken cancellationToken);
     Task<IReadOnlyList<RecurringPayment>> GetActiveAsync(Guid userId, DateOnly? from, DateOnly? to, CancellationToken cancellationToken);
     Task<IReadOnlyList<PaymentTransaction>> GetTransactionsForOwnerAsync(Guid userId, Guid? paymentId, DateOnly? from, DateOnly? to, CancellationToken cancellationToken);
+    Task<bool> HasTransactionForPeriodAsync(Guid userId, Guid paymentId, string paidPeriod, CancellationToken cancellationToken);
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }
 
@@ -151,8 +152,19 @@ public sealed class PaymentService(IPaymentRepository payments)
             return (false, false, null);
 
         var dueDate = payment.NextPaymentDate.Value;
-        payment.RecordPayment(paidAmount, paidDate, dueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), comment, DateTime.UtcNow);
-        await payments.SaveChangesAsync(cancellationToken);
+        var paidPeriod = dueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        if (await payments.HasTransactionForPeriodAsync(userId, paymentId, paidPeriod, cancellationToken))
+            return (true, payment.RecurrenceUnit == RecurrenceUnit.Once, payment.NextPaymentDate);
+
+        payment.RecordPayment(paidAmount, paidDate, paidPeriod, comment, DateTime.UtcNow);
+        try
+        {
+            await payments.SaveChangesAsync(cancellationToken);
+        }
+        catch (PaymentConcurrencyException)
+        {
+            return (false, false, null);
+        }
         return (true, payment.RecurrenceUnit == RecurrenceUnit.Once, payment.NextPaymentDate);
     }
 
@@ -280,9 +292,9 @@ public sealed class PaymentConversationService(
                 draft.Step = PaymentDraftStep.NextPaymentDate;
                 break;
             case PaymentDraftStep.NextPaymentDate:
-                if (input.Equals("сегодня", StringComparison.OrdinalIgnoreCase))
+                if (DateShortcutCalculator.TryParse(input, draft.Today, out var shortcutDate))
                 {
-                    draft.NextPaymentDate = draft.Today;
+                    draft.NextPaymentDate = shortcutDate;
                     draft.Step = PaymentDraftStep.Confirmation;
                     break;
                 }
@@ -397,7 +409,9 @@ public sealed class PaymentEditConversationService(
         switch (draft.Step)
         {
             case PaymentEditStep.Name:
-                if (input != "-")
+                if (DateShortcutCalculator.TryParse(input, draft.Today, out var editShortcutDate))
+                    draft.NextPaymentDate = editShortcutDate;
+                else if (input != "-")
                 {
                     if (string.IsNullOrWhiteSpace(input)) return "Название не может быть пустым. Повторите ввод:";
                     draft.Name = input;
@@ -658,8 +672,8 @@ public sealed class PaymentRecordConversationService(
                 draft.Step = PaymentRecordStep.Date;
                 break;
             case PaymentRecordStep.Date:
-                if (input.Equals("сегодня", StringComparison.OrdinalIgnoreCase))
-                    draft.PaidDate = draft.Today;
+                if (DateShortcutCalculator.TryParse(input, draft.Today, out var paidShortcutDate))
+                    draft.PaidDate = paidShortcutDate;
                 else if (input != "-")
                 {
                     if (!DateOnly.TryParseExact(input, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var paidDate))
