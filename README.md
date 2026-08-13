@@ -44,9 +44,9 @@ tests/
 - `ConnectionStrings__Postgres` — строка подключения для локального запуска;
 - `TELEGRAM_BOT_TOKEN` — токен для Docker Compose;
 - `POSTGRES_PASSWORD` — пароль PostgreSQL для Docker Compose;
-- `TELEGRAM_ALLOWED_USER_ID` — необязательный Telegram User ID единственного разрешенного пользователя.
+- `TELEGRAM_ALLOWED_USER_IDS` — необязательный список разрешенных Telegram User ID через запятую.
 
-Если `TELEGRAM_ALLOWED_USER_ID` пуст, бот принимает пользователей согласно обычной регистрации. После первого `/start` ID можно посмотреть в PostgreSQL и затем включить ограничение:
+Если `TELEGRAM_ALLOWED_USER_IDS` пуст, бот принимает пользователей согласно обычной регистрации. После первого `/start` ID можно посмотреть в PostgreSQL и затем включить ограничение:
 
 ```bash
 docker compose exec postgres psql -U personalassistant -d personalassistant -c 'SELECT "TelegramUserId", "Username" FROM "Users";'
@@ -70,11 +70,11 @@ docker compose logs -f tgbot
 Для первого smoke-теста:
 
 1. Убедитесь, что в логах есть `Database migrations applied` и `PersonalAssistant polling started`.
-2. Выполните `/start` и выберите часовой пояс.
+2. Выполните `/start`, выберите часовой пояс и используйте появившееся главное меню.
 3. Создайте тестовый платеж через `/add`.
 4. Проверьте `/payments`, `/upcoming`, `/edit` и `/pay`.
 5. Проверьте `/history` и `/stats`.
-6. После успешного теста задайте `TELEGRAM_ALLOWED_USER_ID` и перезапустите контейнер.
+6. После успешного теста задайте `TELEGRAM_ALLOWED_USER_IDS` и перезапустите контейнер.
 
 Остановка без удаления данных:
 
@@ -133,8 +133,8 @@ docker compose config
 
 ## Команды бота
 
-- `/start` — регистрация и выбор часового пояса;
-- `/settings` — повторный выбор часового пояса;
+- `/start` — регистрация, выбор часового пояса и показ главного меню;
+- `/settings` — часовой пояс, валюта по умолчанию и настройки напоминаний;
 - `/add` — последовательное добавление платежа;
 - `/payments` — список активных платежей;
 - `/upcoming` — платежи на ближайшие 7 дней;

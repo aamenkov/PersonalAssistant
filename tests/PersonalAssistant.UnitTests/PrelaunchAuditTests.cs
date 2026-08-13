@@ -69,7 +69,7 @@ public sealed class PrelaunchAuditTests
         var states = new InMemoryConversationStateRepository(state);
         var service = new PaymentConversationService(states, new PaymentService(new InMemoryPaymentRepository()));
 
-        await service.BeginAsync(userId, CancellationToken.None);
+        await service.BeginAsync(userId, "RUB", new DateOnly(2026, 8, 13), CancellationToken.None);
 
         Assert.Equal(ConversationKind.AddPayment, state.Kind);
     }

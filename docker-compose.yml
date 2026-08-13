@@ -19,7 +19,7 @@ services:
       dockerfile: Dockerfile
     environment:
       Telegram__BotToken: ${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN}
-      Telegram__AllowedUserId: ${TELEGRAM_ALLOWED_USER_ID:-}
+      Telegram__AllowedUserIds: ${TELEGRAM_ALLOWED_USER_IDS:-}
       ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=personalassistant;Username=personalassistant;Password=${POSTGRES_PASSWORD:-change-me-local-only}
     depends_on:
       postgres:

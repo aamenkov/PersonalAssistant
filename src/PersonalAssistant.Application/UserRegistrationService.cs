@@ -22,6 +22,36 @@ public sealed class UserTimeZoneService(IUserRepository users)
     }
 }
 
+public sealed class UserSettingsService(IUserRepository users)
+{
+    public Task<User?> FindAsync(long telegramUserId, CancellationToken cancellationToken) =>
+        users.FindByTelegramUserIdAsync(telegramUserId, cancellationToken);
+
+    public async Task SetDefaultCurrencyAsync(long telegramUserId, string currency, CancellationToken cancellationToken)
+    {
+        var user = await users.FindByTelegramUserIdAsync(telegramUserId, cancellationToken)
+            ?? throw new InvalidOperationException("User is not registered.");
+        user.SetDefaultCurrency(currency, DateTime.UtcNow);
+        await users.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task SetReminderSettingsAsync(long telegramUserId, TimeOnly reminderTimeLocal, int reminderDaysBefore, CancellationToken cancellationToken)
+    {
+        var user = await users.FindByTelegramUserIdAsync(telegramUserId, cancellationToken)
+            ?? throw new InvalidOperationException("User is not registered.");
+        user.SetReminderSettings(reminderTimeLocal, reminderDaysBefore, DateTime.UtcNow);
+        await users.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task SetReminderTimeAsync(long telegramUserId, TimeOnly reminderTimeLocal, CancellationToken cancellationToken)
+    {
+        var user = await users.FindByTelegramUserIdAsync(telegramUserId, cancellationToken)
+            ?? throw new InvalidOperationException("User is not registered.");
+        user.SetReminderSettings(reminderTimeLocal, user.ReminderDaysBefore, DateTime.UtcNow);
+        await users.SaveChangesAsync(cancellationToken);
+    }
+}
+
 public sealed class UserRegistrationService(IUserRepository users)
 {
     public async Task<User> RegisterOrUpdateAsync(

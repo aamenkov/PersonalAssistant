@@ -22,6 +22,8 @@ public sealed class PersonalAssistantDbContext(DbContextOptions<PersonalAssistan
             entity.Property(x => x.DefaultCurrency).HasMaxLength(3).IsRequired();
             entity.Property(x => x.TimeZoneId).HasMaxLength(100).IsRequired();
             entity.Property(x => x.IsTimeZoneConfigured).IsRequired();
+            entity.Property(x => x.ReminderTimeLocal).IsRequired();
+            entity.Property(x => x.ReminderDaysBefore).IsRequired();
         });
 
         modelBuilder.Entity<RecurringPayment>(entity =>
