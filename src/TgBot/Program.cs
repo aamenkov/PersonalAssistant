@@ -22,6 +22,7 @@ builder.Services.AddScoped<PaymentService>();
 builder.Services.AddScoped<PaymentConversationService>();
 builder.Services.AddScoped<PaymentEditConversationService>();
 builder.Services.AddScoped<PaymentRecordConversationService>();
+builder.Services.AddSingleton<UserUpdateGate>();
 builder.Services.AddSingleton(new BotAccessPolicy(builder.Configuration.GetValue<long?>("Telegram:AllowedUserId")));
 builder.Services.AddSingleton<ITelegramBotClient>(_ => new TelegramBotClient(botToken));
 builder.Services.AddHostedService<TelegramPollingService>();
@@ -47,6 +48,7 @@ internal sealed record BotAccessPolicy(long? AllowedUserId)
 internal sealed class TelegramPollingService(
     ITelegramBotClient bot,
     IServiceScopeFactory scopeFactory,
+    UserUpdateGate updateGate,
     BotAccessPolicy accessPolicy,
     ILogger<TelegramPollingService> logger) : BackgroundService
 {
@@ -69,6 +71,16 @@ internal sealed class TelegramPollingService(
                 await client.SendMessage(unauthorizedMessage.Chat.Id, "Доступ к боту ограничен.", cancellationToken: cancellationToken);
             return;
         }
+
+        if (telegramUserId is null)
+            return;
+
+        await updateGate.RunAsync(telegramUserId.Value,
+            () => HandleUpdateCoreAsync(client, update, cancellationToken), cancellationToken);
+    }
+
+    private async Task HandleUpdateCoreAsync(ITelegramBotClient client, Update update, CancellationToken cancellationToken)
+    {
 
         if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery?.Data is { } paymentCallback && paymentCallback.StartsWith("payment:", StringComparison.Ordinal))
         {
