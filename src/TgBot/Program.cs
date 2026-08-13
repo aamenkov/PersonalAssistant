@@ -129,10 +129,10 @@ internal sealed class TelegramPollingService(
             if (parts[1] == "edit")
             {
                 var editor = scope.ServiceProvider.GetRequiredService<PaymentEditConversationService>();
-                var response = await editor.BeginAsync(user.Id, paymentId, cancellationToken);
+                var response = await editor.BeginAsync(user.Id, paymentId, LocalDate(user.TimeZoneId), cancellationToken);
                 await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
                 if (update.CallbackQuery.Message is { } message)
-                    await client.SendMessage(message.Chat.Id, response, cancellationToken: cancellationToken);
+                    await client.SendMessage(message.Chat.Id, response, replyMarkup: ConversationKeyboard(response), cancellationToken: cancellationToken);
                 return;
             }
 
@@ -142,7 +142,7 @@ internal sealed class TelegramPollingService(
                 var response = await recorder.BeginAsync(user.Id, paymentId, LocalDate(user.TimeZoneId), cancellationToken);
                 await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
                 if (update.CallbackQuery.Message is { } message)
-                    await client.SendMessage(message.Chat.Id, response, cancellationToken: cancellationToken);
+                    await client.SendMessage(message.Chat.Id, response, replyMarkup: ConversationKeyboard(response), cancellationToken: cancellationToken);
                 return;
             }
 
@@ -168,7 +168,7 @@ internal sealed class TelegramPollingService(
                 var deactivated = await payments.DeactivateAsync(user.Id, paymentId, cancellationToken);
                 await client.AnswerCallbackQuery(update.CallbackQuery.Id, deactivated ? "Платеж отключен" : "Платеж не найден", cancellationToken: cancellationToken);
                 if (update.CallbackQuery.Message is { } message)
-                    await client.SendMessage(message.Chat.Id, deactivated ? "Платеж отключен. История оплат сохранена." : "Платеж не найден или уже отключен.", cancellationToken: cancellationToken);
+                    await client.SendMessage(message.Chat.Id, deactivated ? "Платеж отключен. История оплат сохранена." : "Платеж не найден или уже отключен.", replyMarkup: MainMenuKeyboard(), cancellationToken: cancellationToken);
                 return;
             }
 
@@ -215,8 +215,21 @@ internal sealed class TelegramPollingService(
                 }
                 else if (parts[1] == "currency" && parts.Length == 3)
                 {
+                    if (parts[2] == "menu")
+                    {
+                        await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
+                        if (update.CallbackQuery.Message is { } message)
+                            await client.SendMessage(message.Chat.Id, "Выберите валюту по умолчанию:", replyMarkup: CurrencyKeyboard(), cancellationToken: cancellationToken);
+                        return;
+                    }
+
                     await settings.SetDefaultCurrencyAsync(update.CallbackQuery.From.Id, parts[2], cancellationToken);
                     await client.AnswerCallbackQuery(update.CallbackQuery.Id, $"Валюта по умолчанию: {parts[2]}", cancellationToken: cancellationToken);
+                    if (update.CallbackQuery.Message is { } currencyMessage)
+                    {
+                        var updatedUser = await settings.FindAsync(update.CallbackQuery.From.Id, cancellationToken);
+                        await client.SendMessage(currencyMessage.Chat.Id, "Настройка сохранена.", replyMarkup: SettingsKeyboard(updatedUser?.DefaultCurrency ?? parts[2]), cancellationToken: cancellationToken);
+                    }
                 }
                 else if (parts[1] == "days" && parts.Length == 3 && int.TryParse(parts[2], out var days))
                 {
@@ -364,8 +377,9 @@ internal sealed class TelegramPollingService(
                 return;
             }
 
-            await client.SendMessage(update.Message.Chat.Id, "Настройки профиля. Часовой пояс можно изменить здесь, а валюту и напоминания — кнопками ниже:",
-                replyMarkup: SettingsKeyboard(), cancellationToken: cancellationToken);
+            var user = await users.FindByTelegramUserIdAsync(from.Id, cancellationToken);
+            await client.SendMessage(update.Message.Chat.Id, "Настройки профиля. Выберите параметр для изменения:",
+                replyMarkup: SettingsKeyboard(user!.DefaultCurrency), cancellationToken: cancellationToken);
         }
         else if (command == "/help")
         {
@@ -386,7 +400,13 @@ internal sealed class TelegramPollingService(
                 ?? await scope.ServiceProvider.GetRequiredService<PaymentEditConversationService>().HandleInputAsync(user.Id, text, cancellationToken)
                 ?? await scope.ServiceProvider.GetRequiredService<PaymentRecordConversationService>().HandleInputAsync(user.Id, text, cancellationToken);
             if (response is not null)
-                await client.SendMessage(update.Message.Chat.Id, response, replyMarkup: AddStepKeyboard(response), cancellationToken: cancellationToken);
+            {
+                var finished = response.Contains("отменено", StringComparison.OrdinalIgnoreCase)
+                    || response.Contains("сохранен", StringComparison.OrdinalIgnoreCase)
+                    || response.Contains("обновлен", StringComparison.OrdinalIgnoreCase);
+                await client.SendMessage(update.Message.Chat.Id, response,
+                    replyMarkup: finished ? MainMenuKeyboard() : ConversationKeyboard(response), cancellationToken: cancellationToken);
+            }
             else
                 await client.SendMessage(update.Message.Chat.Id, "Команда не распознана. Используйте /help.", cancellationToken: cancellationToken);
         }
@@ -408,14 +428,21 @@ internal sealed class TelegramPollingService(
         new[] { InlineKeyboardButton.WithCallbackData("Токио (UTC+9)", "timezone:Asia/Tokyo"), InlineKeyboardButton.WithCallbackData("Нью-Йорк (UTC−5)", "timezone:America/New_York") }
     });
 
-    private static InlineKeyboardMarkup SettingsKeyboard() => new(new[]
+    private static InlineKeyboardMarkup SettingsKeyboard(string currency) => new(new[]
     {
         new[] { InlineKeyboardButton.WithCallbackData("Изменить часовой пояс", "settings:timezone") },
-        new[] { InlineKeyboardButton.WithCallbackData("Валюта: RUB", "settings:currency:RUB"), InlineKeyboardButton.WithCallbackData("USD", "settings:currency:USD") },
+        new[] { InlineKeyboardButton.WithCallbackData($"Валюта ({currency})", "settings:currency:menu") },
         new[] { InlineKeyboardButton.WithCallbackData("Напоминать за 1 день", "settings:days:1"), InlineKeyboardButton.WithCallbackData("за 3 дня", "settings:days:3") },
         new[] { InlineKeyboardButton.WithCallbackData("Напоминать за 7 дней", "settings:days:7") },
         new[] { InlineKeyboardButton.WithCallbackData("Время: 09:00", "settings:time:09:00"), InlineKeyboardButton.WithCallbackData("12:00", "settings:time:12:00") },
         new[] { InlineKeyboardButton.WithCallbackData("18:00", "settings:time:18:00") }
+    });
+
+    private static InlineKeyboardMarkup CurrencyKeyboard() => new(new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("Российский рубль (RUB)", "settings:currency:RUB") },
+        new[] { InlineKeyboardButton.WithCallbackData("Доллар США (USD)", "settings:currency:USD") },
+        new[] { InlineKeyboardButton.WithCallbackData("Евро (EUR)", "settings:currency:EUR") }
     });
 
     private static ReplyKeyboardMarkup MainMenuKeyboard() => new(new[]
@@ -430,6 +457,10 @@ internal sealed class TelegramPollingService(
     {
         if (response.Contains("периодичность", StringComparison.OrdinalIgnoreCase))
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Еженедельно", "Ежемесячно" }, new KeyboardButton[] { "Ежегодно", "Однократно" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        if (response.Contains("способ оплаты", StringComparison.OrdinalIgnoreCase))
+            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Карта", "Банковский перевод" }, new KeyboardButton[] { "Наличные", "Другое" }, new KeyboardButton[] { "Оставить текущий" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        if (response.Contains("автосписание", StringComparison.OrdinalIgnoreCase))
+            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Да", "Нет" }, new KeyboardButton[] { "Оставить текущее" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("дату", StringComparison.OrdinalIgnoreCase) || response.Contains("Сегодня", StringComparison.OrdinalIgnoreCase))
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Сегодня" }, new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("Сохранить", StringComparison.OrdinalIgnoreCase))
@@ -438,6 +469,15 @@ internal sealed class TelegramPollingService(
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         return null;
     }
+
+    private static ReplyKeyboardMarkup? ConversationKeyboard(string response) =>
+        response.Contains("сохранен", StringComparison.OrdinalIgnoreCase)
+        || response.Contains("обновлен", StringComparison.OrdinalIgnoreCase)
+        || response.Contains("отменено", StringComparison.OrdinalIgnoreCase)
+        || response.Contains("отменена", StringComparison.OrdinalIgnoreCase)
+        || response.Contains("отменены", StringComparison.OrdinalIgnoreCase)
+        ? MainMenuKeyboard()
+        : AddStepKeyboard(response);
 
     private static DateOnly LocalDate(string timeZoneId)
     {
@@ -451,7 +491,7 @@ internal sealed class TelegramPollingService(
             return upcoming ? "На ближайшие 7 дней платежей нет." : "Активных платежей пока нет.";
 
         var title = upcoming ? "Предстоящие платежи:" : "Активные платежи:";
-        var lines = payments.Select(x => $"• {x.Name} — {x.Amount:0.##} {x.Currency}, {x.DueDate:yyyy-MM-dd} ({x.RecurrenceUnit})");
+        var lines = payments.Select(x => $"• {x.Name} — {x.Amount:0.##} {x.Currency}, {x.DueDate:yyyy-MM-dd} ({PaymentDisplayNames.Recurrence(x.RecurrenceUnit)})");
         return title + "\n" + string.Join("\n", lines);
     }
 
