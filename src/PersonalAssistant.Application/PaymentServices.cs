@@ -232,10 +232,10 @@ public sealed class PaymentConversationService(
     IConversationStateRepository states,
     PaymentService payments)
 {
-    public async Task<string> BeginAsync(Guid userId, CancellationToken cancellationToken)
+    public async Task<string> BeginAsync(Guid userId, string defaultCurrency, DateOnly localToday, CancellationToken cancellationToken)
     {
         var existing = await states.FindAsync(userId, cancellationToken);
-        var payload = JsonSerializer.Serialize(new PaymentDraftState());
+        var payload = JsonSerializer.Serialize(new PaymentDraftState { Currency = defaultCurrency, Today = localToday });
         if (existing is not null)
             existing.Reset(ConversationKind.AddPayment, payload, DateTime.UtcNow);
         else
@@ -252,6 +252,12 @@ public sealed class PaymentConversationService(
 
         var draft = JsonSerializer.Deserialize<PaymentDraftState>(state.PayloadJson) ?? new PaymentDraftState();
         input = input.Trim();
+        if (input.Equals("отмена", StringComparison.OrdinalIgnoreCase) || input.Equals("cancel", StringComparison.OrdinalIgnoreCase))
+        {
+            states.Remove(state);
+            await states.SaveChangesAsync(cancellationToken);
+            return "Создание платежа отменено.";
+        }
         if (input.Length == 0)
             return "Значение не может быть пустым. Попробуйте еще раз:";
 
@@ -265,12 +271,6 @@ public sealed class PaymentConversationService(
                 if (!UserInputParser.TryParsePositiveAmount(input, out var amount))
                     return "Введите положительную сумму, например `30.50`:";
                 draft.Amount = amount;
-                draft.Step = PaymentDraftStep.Currency;
-                break;
-            case PaymentDraftStep.Currency:
-                if (input.Length != 3 || input.Any(x => !char.IsLetter(x)))
-                    return "Введите трехбуквенный код валюты, например `RUB` или `USD`:";
-                draft.Currency = input.ToUpperInvariant();
                 draft.Step = PaymentDraftStep.Recurrence;
                 break;
             case PaymentDraftStep.Recurrence:
@@ -280,6 +280,12 @@ public sealed class PaymentConversationService(
                 draft.Step = PaymentDraftStep.NextPaymentDate;
                 break;
             case PaymentDraftStep.NextPaymentDate:
+                if (input.Equals("сегодня", StringComparison.OrdinalIgnoreCase))
+                {
+                    draft.NextPaymentDate = draft.Today;
+                    draft.Step = PaymentDraftStep.Confirmation;
+                    break;
+                }
                 if (!DateOnly.TryParseExact(input, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var nextDate))
                     return "Введите дату в формате `ГГГГ-ММ-ДД`, например `2026-08-15`:";
                 draft.NextPaymentDate = nextDate;
@@ -305,9 +311,8 @@ public sealed class PaymentConversationService(
         return draft.Step switch
         {
             PaymentDraftStep.Amount => "Введите сумму:",
-            PaymentDraftStep.Currency => "Введите валюту (например, RUB):",
             PaymentDraftStep.Recurrence => "Введите периодичность: weekly, monthly, yearly или once:",
-            PaymentDraftStep.NextPaymentDate => "Введите дату следующего платежа в формате ГГГГ-ММ-ДД:",
+            PaymentDraftStep.NextPaymentDate => "Выберите «Сегодня» или введите дату следующего платежа в формате ГГГГ-ММ-ДД:",
             PaymentDraftStep.Confirmation => $"Проверьте платеж:\n{draft.Name} — {draft.Amount:0.##} {draft.Currency}\nДата: {draft.NextPaymentDate:yyyy-MM-dd}\nПериодичность: {draft.RecurrenceUnit}\n\nСохранить? Введите да или нет.",
             _ => "Введите название платежа:"
         };
@@ -334,16 +339,16 @@ public sealed class PaymentConversationService(
         public string? Currency { get; set; }
         public RecurrenceUnit? RecurrenceUnit { get; set; }
         public DateOnly? NextPaymentDate { get; set; }
+        public DateOnly Today { get; set; }
     }
 
     private enum PaymentDraftStep
     {
         Name = 0,
         Amount = 1,
-        Currency = 2,
-        Recurrence = 3,
-        NextPaymentDate = 4,
-        Confirmation = 5
+        Recurrence = 2,
+        NextPaymentDate = 3,
+        Confirmation = 4
     }
 }
 
@@ -596,6 +601,7 @@ public sealed class PaymentRecordConversationService(
             ExpectedAmount = payment.Amount,
             PaidAmount = payment.Amount,
             PaidDate = localToday,
+            Today = localToday,
             Step = PaymentRecordStep.Amount
         };
         var existing = await states.FindAsync(userId, cancellationToken);
@@ -639,7 +645,9 @@ public sealed class PaymentRecordConversationService(
                 draft.Step = PaymentRecordStep.Date;
                 break;
             case PaymentRecordStep.Date:
-                if (input != "-")
+                if (input.Equals("сегодня", StringComparison.OrdinalIgnoreCase))
+                    draft.PaidDate = draft.Today;
+                else if (input != "-")
                 {
                     if (!DateOnly.TryParseExact(input, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var paidDate))
                         return "Введите дату оплаты в формате ГГГГ-ММ-ДД или `-` для сегодняшней даты:";
@@ -674,7 +682,7 @@ public sealed class PaymentRecordConversationService(
         await states.SaveChangesAsync(cancellationToken);
         return draft.Step switch
         {
-            PaymentRecordStep.Date => "Введите дату оплаты в формате ГГГГ-ММ-ДД или `-` для сегодняшней даты:",
+            PaymentRecordStep.Date => "Выберите «Сегодня» или введите дату оплаты в формате ГГГГ-ММ-ДД:",
             PaymentRecordStep.Comment => "Введите комментарий или `-`, если комментарий не нужен:",
             PaymentRecordStep.Confirmation => $"Проверьте оплату:\nСумма: {draft.PaidAmount:0.##}\nДата: {draft.PaidDate:yyyy-MM-dd}\nКомментарий: {draft.Comment ?? "нет"}\n\nСохранить? Введите да или нет.",
             _ => "Введите фактическую сумму или `-` для ожидаемой суммы:"
@@ -688,6 +696,7 @@ public sealed class PaymentRecordConversationService(
         public decimal? PaidAmount { get; set; }
         public DateOnly? PaidDate { get; set; }
         public string? Comment { get; set; }
+        public DateOnly Today { get; set; }
         public PaymentRecordStep Step { get; set; }
     }
 

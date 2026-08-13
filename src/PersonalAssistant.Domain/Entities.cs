@@ -12,7 +12,8 @@ public sealed class User
         Username = username;
         DefaultCurrency = "RUB";
         TimeZoneId = "UTC";
-        ReminderTimeUtc = TimeOnly.FromTimeSpan(TimeSpan.FromHours(9));
+        ReminderTimeLocal = new TimeOnly(9, 0);
+        ReminderDaysBefore = 3;
         CreatedAtUtc = createdAtUtc;
         UpdatedAtUtc = createdAtUtc;
     }
@@ -25,7 +26,8 @@ public sealed class User
     public string DefaultCurrency { get; private set; } = "RUB";
     public string TimeZoneId { get; private set; } = "UTC";
     public bool IsTimeZoneConfigured { get; private set; }
-    public TimeOnly ReminderTimeUtc { get; private set; }
+    public TimeOnly ReminderTimeLocal { get; private set; }
+    public int ReminderDaysBefore { get; private set; }
     public DateTime CreatedAtUtc { get; private set; }
     public DateTime UpdatedAtUtc { get; private set; }
     public ICollection<RecurringPayment> Payments { get; private set; } = new List<RecurringPayment>();
@@ -43,6 +45,25 @@ public sealed class User
     {
         TimeZoneId = timeZoneId;
         IsTimeZoneConfigured = true;
+        UpdatedAtUtc = updatedAtUtc;
+    }
+
+    public void SetDefaultCurrency(string currency, DateTime updatedAtUtc)
+    {
+        if (string.IsNullOrWhiteSpace(currency) || currency.Trim().Length != 3 || currency.Any(c => !char.IsLetter(c)))
+            throw new ArgumentException("Currency must be a three-letter code.", nameof(currency));
+
+        DefaultCurrency = currency.Trim().ToUpperInvariant();
+        UpdatedAtUtc = updatedAtUtc;
+    }
+
+    public void SetReminderSettings(TimeOnly reminderTimeLocal, int reminderDaysBefore, DateTime updatedAtUtc)
+    {
+        if (reminderDaysBefore is < 0 or > 30)
+            throw new ArgumentOutOfRangeException(nameof(reminderDaysBefore));
+
+        ReminderTimeLocal = reminderTimeLocal;
+        ReminderDaysBefore = reminderDaysBefore;
         UpdatedAtUtc = updatedAtUtc;
     }
 }

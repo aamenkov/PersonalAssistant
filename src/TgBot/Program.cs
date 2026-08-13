@@ -4,6 +4,7 @@ using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
+using Telegram.Bot.Exceptions;
 using PersonalAssistant.Application;
 using PersonalAssistant.Infrastructure;
 
@@ -16,6 +17,7 @@ builder.Services.AddPersonalAssistantInfrastructure(builder.Configuration);
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<UserRegistrationService>();
 builder.Services.AddScoped<UserTimeZoneService>();
+builder.Services.AddScoped<UserSettingsService>();
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddScoped<IConversationStateRepository, ConversationStateRepository>();
 builder.Services.AddScoped<PaymentService>();
@@ -23,7 +25,7 @@ builder.Services.AddScoped<PaymentConversationService>();
 builder.Services.AddScoped<PaymentEditConversationService>();
 builder.Services.AddScoped<PaymentRecordConversationService>();
 builder.Services.AddSingleton<UserUpdateGate>();
-builder.Services.AddSingleton(new BotAccessPolicy(builder.Configuration.GetValue<long?>("Telegram:AllowedUserId")));
+builder.Services.AddSingleton(BotAccessPolicy.Parse(builder.Configuration["Telegram:AllowedUserIds"]));
 builder.Services.AddSingleton<ITelegramBotClient>(_ => new TelegramBotClient(botToken));
 builder.Services.AddHostedService<TelegramPollingService>();
 
@@ -40,9 +42,24 @@ static async Task ApplyMigrationsAsync(IHost app)
     logger.LogInformation("Database migrations applied");
 }
 
-internal sealed record BotAccessPolicy(long? AllowedUserId)
+internal sealed class BotAccessPolicy
 {
-    public bool IsAllowed(long telegramUserId) => !AllowedUserId.HasValue || AllowedUserId.Value == telegramUserId;
+    private readonly IReadOnlySet<long> allowedUserIds;
+
+    private BotAccessPolicy(IReadOnlySet<long> allowedUserIds) => this.allowedUserIds = allowedUserIds;
+
+    public static BotAccessPolicy Parse(string? value)
+    {
+        var values = (value ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var invalid = values.Where(x => !long.TryParse(x, out _)).ToArray();
+        if (invalid.Length > 0)
+            throw new InvalidOperationException($"Telegram:AllowedUserIds contains invalid values: {string.Join(", ", invalid)}");
+
+        return new BotAccessPolicy(values.Select(long.Parse).ToHashSet());
+    }
+
+    public bool IsAllowed(long telegramUserId) => allowedUserIds.Count == 0 || allowedUserIds.Contains(telegramUserId);
 }
 
 internal sealed class TelegramPollingService(
@@ -75,8 +92,17 @@ internal sealed class TelegramPollingService(
         if (telegramUserId is null)
             return;
 
-        await updateGate.RunAsync(telegramUserId.Value,
-            () => HandleUpdateCoreAsync(client, update, cancellationToken), cancellationToken);
+        await updateGate.RunAsync(telegramUserId.Value, async () =>
+        {
+            try
+            {
+                await HandleUpdateCoreAsync(client, update, cancellationToken);
+            }
+            catch (RequestException exception)
+            {
+                logger.LogWarning("Telegram API temporarily unavailable while responding to update {UpdateId}: {Message}", update.Id, exception.Message);
+            }
+        }, cancellationToken);
     }
 
     private async Task HandleUpdateCoreAsync(ITelegramBotClient client, Update update, CancellationToken cancellationToken)
@@ -160,11 +186,50 @@ internal sealed class TelegramPollingService(
                 await timeZones.SetAsync(update.CallbackQuery.From.Id, timeZoneId, cancellationToken);
                 await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Часовой пояс сохранен", cancellationToken: cancellationToken);
                 if (update.CallbackQuery.Message is { } callbackMessage)
-                    await client.SendMessage(callbackMessage.Chat.Id, $"Готово. Часовой пояс: {timeZoneId}.", cancellationToken: cancellationToken);
+                    await client.SendMessage(callbackMessage.Chat.Id, $"Готово. Часовой пояс: {timeZoneId}.", replyMarkup: MainMenuKeyboard(), cancellationToken: cancellationToken);
             }
             catch (Exception exception) when (exception is TimeZoneNotFoundException or InvalidTimeZoneException)
             {
                 await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Неизвестный часовой пояс", showAlert: true, cancellationToken: cancellationToken);
+            }
+            catch (InvalidOperationException)
+            {
+                await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Сначала выполните /start", showAlert: true, cancellationToken: cancellationToken);
+            }
+
+            return;
+        }
+
+        if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery?.Data is { } settingsData && settingsData.StartsWith("settings:", StringComparison.Ordinal))
+        {
+            var parts = settingsData.Split(':');
+            using var scope = scopeFactory.CreateScope();
+            var settings = scope.ServiceProvider.GetRequiredService<UserSettingsService>();
+            try
+            {
+                if (parts[1] == "timezone")
+                {
+                    await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
+                    if (update.CallbackQuery.Message is { } message)
+                        await client.SendMessage(message.Chat.Id, "Выберите часовой пояс. Его можно изменить в любой момент:", replyMarkup: TimeZoneKeyboard(), cancellationToken: cancellationToken);
+                }
+                else if (parts[1] == "currency" && parts.Length == 3)
+                {
+                    await settings.SetDefaultCurrencyAsync(update.CallbackQuery.From.Id, parts[2], cancellationToken);
+                    await client.AnswerCallbackQuery(update.CallbackQuery.Id, $"Валюта по умолчанию: {parts[2]}", cancellationToken: cancellationToken);
+                }
+                else if (parts[1] == "days" && parts.Length == 3 && int.TryParse(parts[2], out var days))
+                {
+                    var user = await settings.FindAsync(update.CallbackQuery.From.Id, cancellationToken)
+                        ?? throw new InvalidOperationException("User is not registered.");
+                    await settings.SetReminderSettingsAsync(update.CallbackQuery.From.Id, user.ReminderTimeLocal, days, cancellationToken);
+                    await client.AnswerCallbackQuery(update.CallbackQuery.Id, $"Напоминание за {days} дн.", cancellationToken: cancellationToken);
+                }
+                else if (parts[1] == "time" && parts.Length == 4 && TimeOnly.TryParse($"{parts[2]}:{parts[3]}", out var reminderTime))
+                {
+                    await settings.SetReminderTimeAsync(update.CallbackQuery.From.Id, reminderTime, cancellationToken);
+                    await client.AnswerCallbackQuery(update.CallbackQuery.Id, $"Время напоминаний: {reminderTime:HH\\:mm}", cancellationToken: cancellationToken);
+                }
             }
             catch (InvalidOperationException)
             {
@@ -184,10 +249,10 @@ internal sealed class TelegramPollingService(
             var registration = scope.ServiceProvider.GetRequiredService<UserRegistrationService>();
             var user = await registration.RegisterOrUpdateAsync(from.Id, update.Message.Chat.Id, from.FirstName, from.Username, cancellationToken);
             if (user.IsTimeZoneConfigured)
-                await client.SendMessage(update.Message.Chat.Id, $"С возвращением! Ваш часовой пояс: {user.TimeZoneId}.", cancellationToken: cancellationToken);
+                await client.SendMessage(update.Message.Chat.Id, $"С возвращением! Ваш часовой пояс: {user.TimeZoneId}.", replyMarkup: MainMenuKeyboard(), cancellationToken: cancellationToken);
             else
                 await client.SendMessage(update.Message.Chat.Id,
-                    "Добро пожаловать в PersonalAssistant!\n\nЧтобы напоминания приходили по вашему местному времени, выберите часовой пояс:",
+                    "Добро пожаловать в PersonalAssistant!\n\nЧтобы напоминания приходили по вашему местному времени, выберите часовой пояс. Его можно изменить позже в настройках:",
                     replyMarkup: TimeZoneKeyboard(), cancellationToken: cancellationToken);
         }
         else if (command == "/add")
@@ -202,7 +267,7 @@ internal sealed class TelegramPollingService(
             }
 
             var conversations = scope.ServiceProvider.GetRequiredService<PaymentConversationService>();
-            await client.SendMessage(update.Message.Chat.Id, await conversations.BeginAsync(user.Id, cancellationToken), cancellationToken: cancellationToken);
+            await client.SendMessage(update.Message.Chat.Id, await conversations.BeginAsync(user.Id, user.DefaultCurrency, LocalDate(user.TimeZoneId), cancellationToken), replyMarkup: AddStepKeyboard("Введите название платежа:"), cancellationToken: cancellationToken);
         }
         else if (command is "/payments" or "/upcoming")
         {
@@ -299,8 +364,8 @@ internal sealed class TelegramPollingService(
                 return;
             }
 
-            await client.SendMessage(update.Message.Chat.Id, "Выберите часовой пояс для напоминаний:",
-                replyMarkup: TimeZoneKeyboard(), cancellationToken: cancellationToken);
+            await client.SendMessage(update.Message.Chat.Id, "Настройки профиля. Часовой пояс можно изменить здесь, а валюту и напоминания — кнопками ниже:",
+                replyMarkup: SettingsKeyboard(), cancellationToken: cancellationToken);
         }
         else if (command == "/help")
         {
@@ -321,7 +386,7 @@ internal sealed class TelegramPollingService(
                 ?? await scope.ServiceProvider.GetRequiredService<PaymentEditConversationService>().HandleInputAsync(user.Id, text, cancellationToken)
                 ?? await scope.ServiceProvider.GetRequiredService<PaymentRecordConversationService>().HandleInputAsync(user.Id, text, cancellationToken);
             if (response is not null)
-                await client.SendMessage(update.Message.Chat.Id, response, cancellationToken: cancellationToken);
+                await client.SendMessage(update.Message.Chat.Id, response, replyMarkup: AddStepKeyboard(response), cancellationToken: cancellationToken);
             else
                 await client.SendMessage(update.Message.Chat.Id, "Команда не распознана. Используйте /help.", cancellationToken: cancellationToken);
         }
@@ -329,16 +394,50 @@ internal sealed class TelegramPollingService(
 
     private Task HandleErrorAsync(ITelegramBotClient client, Exception exception, CancellationToken cancellationToken)
     {
-        logger.LogError(exception, "Telegram update processing failed");
+        if (exception is RequestException)
+            logger.LogWarning("Telegram API temporarily unavailable: {Message}", exception.Message);
+        else
+            logger.LogError(exception, "Telegram update processing failed");
         return Task.CompletedTask;
     }
 
     private static InlineKeyboardMarkup TimeZoneKeyboard() => new(new[]
     {
-        new[] { InlineKeyboardButton.WithCallbackData("UTC", "timezone:UTC"), InlineKeyboardButton.WithCallbackData("Москва (UTC+3)", "timezone:Europe/Moscow") },
-        new[] { InlineKeyboardButton.WithCallbackData("Берлин", "timezone:Europe/Berlin"), InlineKeyboardButton.WithCallbackData("Алматы", "timezone:Asia/Almaty") },
-        new[] { InlineKeyboardButton.WithCallbackData("Токио", "timezone:Asia/Tokyo"), InlineKeyboardButton.WithCallbackData("Нью-Йорк", "timezone:America/New_York") }
+        new[] { InlineKeyboardButton.WithCallbackData("UTC (UTC+0)", "timezone:UTC"), InlineKeyboardButton.WithCallbackData("Москва (UTC+3)", "timezone:Europe/Moscow") },
+        new[] { InlineKeyboardButton.WithCallbackData("Берлин (UTC+1)", "timezone:Europe/Berlin"), InlineKeyboardButton.WithCallbackData("Алматы (UTC+5)", "timezone:Asia/Almaty") },
+        new[] { InlineKeyboardButton.WithCallbackData("Токио (UTC+9)", "timezone:Asia/Tokyo"), InlineKeyboardButton.WithCallbackData("Нью-Йорк (UTC−5)", "timezone:America/New_York") }
     });
+
+    private static InlineKeyboardMarkup SettingsKeyboard() => new(new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("Изменить часовой пояс", "settings:timezone") },
+        new[] { InlineKeyboardButton.WithCallbackData("Валюта: RUB", "settings:currency:RUB"), InlineKeyboardButton.WithCallbackData("USD", "settings:currency:USD") },
+        new[] { InlineKeyboardButton.WithCallbackData("Напоминать за 1 день", "settings:days:1"), InlineKeyboardButton.WithCallbackData("за 3 дня", "settings:days:3") },
+        new[] { InlineKeyboardButton.WithCallbackData("Напоминать за 7 дней", "settings:days:7") },
+        new[] { InlineKeyboardButton.WithCallbackData("Время: 09:00", "settings:time:09:00"), InlineKeyboardButton.WithCallbackData("12:00", "settings:time:12:00") },
+        new[] { InlineKeyboardButton.WithCallbackData("18:00", "settings:time:18:00") }
+    });
+
+    private static ReplyKeyboardMarkup MainMenuKeyboard() => new(new[]
+    {
+        new KeyboardButton[] { "Предстоящие платежи", "Мои платежи" },
+        new KeyboardButton[] { "Добавить платеж", "Отметить оплату" },
+        new KeyboardButton[] { "Статистика", "История" },
+        new KeyboardButton[] { "Настройки", "Помощь" }
+    }) { ResizeKeyboard = true };
+
+    private static ReplyKeyboardMarkup? AddStepKeyboard(string response)
+    {
+        if (response.Contains("периодичность", StringComparison.OrdinalIgnoreCase))
+            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Еженедельно", "Ежемесячно" }, new KeyboardButton[] { "Ежегодно", "Однократно" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        if (response.Contains("дату", StringComparison.OrdinalIgnoreCase) || response.Contains("Сегодня", StringComparison.OrdinalIgnoreCase))
+            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Сегодня" }, new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        if (response.Contains("Сохранить", StringComparison.OrdinalIgnoreCase))
+            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Да", "Нет" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        if (response.Contains("отмена", StringComparison.OrdinalIgnoreCase))
+            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        return null;
+    }
 
     private static DateOnly LocalDate(string timeZoneId)
     {
@@ -373,6 +472,22 @@ internal sealed class TelegramPollingService(
 
     private static string? GetCommand(string text)
     {
+        return text.Trim() switch
+        {
+            "Предстоящие платежи" => "/upcoming",
+            "Мои платежи" => "/payments",
+            "Добавить платеж" => "/add",
+            "Отметить оплату" => "/pay",
+            "Статистика" => "/stats",
+            "История" => "/history",
+            "Настройки" => "/settings",
+            "Помощь" => "/help",
+            _ => GetSlashCommand(text)
+        };
+    }
+
+    private static string? GetSlashCommand(string text)
+    {
         var token = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
         if (token is null || !token.StartsWith('/'))
             return null;
@@ -383,6 +498,13 @@ internal sealed class TelegramPollingService(
     private static bool TryParseMonth(string command, string timeZoneId, out int year, out int month)
     {
         var parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 1 && command is "Статистика" or "История")
+        {
+            var localDate = LocalDate(timeZoneId);
+            year = localDate.Year;
+            month = localDate.Month;
+            return true;
+        }
         if (parts.Length == 1)
         {
             var localDate = LocalDate(timeZoneId);
