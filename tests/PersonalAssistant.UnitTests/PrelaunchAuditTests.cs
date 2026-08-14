@@ -92,6 +92,51 @@ public sealed class PrelaunchAuditTests
         Assert.Contains("2026-08-14", states.State.PayloadJson);
     }
 
+    [Fact]
+    public async Task PaymentRecordConversation_AcceptsButtonsForDefaultsAndSavesPayment()
+    {
+        var userId = Guid.NewGuid();
+        var payment = RecurringPayment.Create(userId, "Internet", 30, "RUB", 1, RecurrenceUnit.Month,
+            new DateOnly(2026, 8, 15), DateTime.UtcNow);
+        var paymentRepository = new InMemoryPaymentRepository();
+        paymentRepository.Items.Add(payment);
+        var states = new InMemoryConversationStateRepository();
+        var service = new PaymentRecordConversationService(states, new PaymentService(paymentRepository));
+
+        await service.BeginAsync(userId, payment.Id, new DateOnly(2026, 8, 14), CancellationToken.None);
+        await service.HandleInputAsync(userId, "Ожидаемая сумма", CancellationToken.None);
+        var commentPrompt = await service.HandleInputAsync(userId, "Сегодня", CancellationToken.None);
+        var confirmation = await service.HandleInputAsync(userId, "Без комментария", CancellationToken.None);
+        var result = await service.HandleInputAsync(userId, "Да", CancellationToken.None);
+
+        Assert.Contains("Без комментария", commentPrompt);
+        Assert.Contains("Комментарий: нет", confirmation);
+        Assert.Contains("Оплата сохранена", result);
+        Assert.Null(states.State);
+        Assert.Single(payment.Transactions);
+    }
+
+    [Fact]
+    public async Task PaymentEditConversation_UsesKeepCurrentButtonAndDateShortcutOnCorrectStep()
+    {
+        var userId = Guid.NewGuid();
+        var payment = RecurringPayment.Create(userId, "Internet", 30, "RUB", 1, RecurrenceUnit.Month,
+            new DateOnly(2026, 8, 20), DateTime.UtcNow);
+        var paymentRepository = new InMemoryPaymentRepository();
+        paymentRepository.Items.Add(payment);
+        var states = new InMemoryConversationStateRepository();
+        var service = new PaymentEditConversationService(states, new PaymentService(paymentRepository));
+
+        await service.BeginAsync(userId, payment.Id, new DateOnly(2026, 8, 14), CancellationToken.None);
+        for (var step = 0; step < 5; step++)
+            await service.HandleInputAsync(userId, "Оставить текущее", CancellationToken.None);
+        var nextPrompt = await service.HandleInputAsync(userId, "Завтра", CancellationToken.None);
+
+        Assert.Contains("Способ оплаты", nextPrompt);
+        Assert.Contains("2026-08-15", states.State!.PayloadJson);
+        Assert.Equal("Internet", payment.Name);
+    }
+
     private sealed class InMemoryConversationStateRepository(ConversationState? state = null) : IConversationStateRepository
     {
         public ConversationState? State { get; private set; } = state;

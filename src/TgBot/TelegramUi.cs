@@ -130,16 +130,42 @@ internal static class TelegramUi
 
     private static ReplyKeyboardMarkup? AddStepKeyboard(string response)
     {
+        if (response.Contains("Ожидаемая сумма", StringComparison.OrdinalIgnoreCase))
+            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Ожидаемая сумма" }, new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        if (response.Contains("Без комментария", StringComparison.OrdinalIgnoreCase))
+            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Без комментария" }, new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("периодичность", StringComparison.OrdinalIgnoreCase))
-            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Еженедельно", "Ежемесячно" }, new KeyboardButton[] { "Ежегодно", "Однократно" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        {
+            var rows = new List<KeyboardButton[]>
+            {
+                new KeyboardButton[] { "Еженедельно", "Ежемесячно" },
+                new KeyboardButton[] { "Ежегодно", "Однократно" }
+            };
+            if (response.Contains("Оставить текущее", StringComparison.OrdinalIgnoreCase))
+                rows.Add(new KeyboardButton[] { "Оставить текущее" });
+            return new ReplyKeyboardMarkup(rows) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        }
         if (response.Contains("способ оплаты", StringComparison.OrdinalIgnoreCase))
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Карта", "Банковский перевод" }, new KeyboardButton[] { "Наличные", "Другое" }, new KeyboardButton[] { "Оставить текущий" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("автосписание", StringComparison.OrdinalIgnoreCase))
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Да", "Нет" }, new KeyboardButton[] { "Оставить текущее" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("дату", StringComparison.OrdinalIgnoreCase) || response.Contains("Сегодня", StringComparison.OrdinalIgnoreCase))
-            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Сегодня", "Завтра" }, new KeyboardButton[] { "Первое число следующего месяца" }, new KeyboardButton[] { "То же число следующего месяца" }, new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        {
+            var rows = new List<KeyboardButton[]>
+            {
+                new KeyboardButton[] { "Сегодня", "Завтра" },
+                new KeyboardButton[] { "Первое число следующего месяца" },
+                new KeyboardButton[] { "То же число следующего месяца" }
+            };
+            if (response.Contains("Оставить текущее", StringComparison.OrdinalIgnoreCase))
+                rows.Add(new KeyboardButton[] { "Оставить текущее" });
+            rows.Add(new KeyboardButton[] { "Отмена" });
+            return new ReplyKeyboardMarkup(rows) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        }
         if (response.Contains("Сохранить", StringComparison.OrdinalIgnoreCase))
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Да", "Нет" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        if (response.Contains("Оставить текущее", StringComparison.OrdinalIgnoreCase))
+            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Оставить текущее" }, new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("отмена", StringComparison.OrdinalIgnoreCase))
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         return null;
