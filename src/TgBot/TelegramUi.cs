@@ -64,7 +64,7 @@ internal static class TelegramUi
     public static InlineKeyboardMarkup PaymentActionKeyboard(IReadOnlyList<PaymentListItem> payments, string action) =>
         new(payments.Select(payment => new[]
         {
-            InlineKeyboardButton.WithCallbackData($"{payment.Name} — {payment.Amount:0.##} {payment.Currency}", TelegramCallbackData.Payment(action, payment.Id))
+            InlineKeyboardButton.WithCallbackData($"{ActionLabel(action)}: {payment.Name} — {payment.Amount:0.##} {payment.Currency}", TelegramCallbackData.Payment(action, payment.Id))
         }));
 
     public static string FormatHistory(IReadOnlyList<PaymentTransactionItem> history)
@@ -130,6 +130,8 @@ internal static class TelegramUi
 
     private static ReplyKeyboardMarkup? AddStepKeyboard(string response)
     {
+        if (response.Contains("Сохранить", StringComparison.OrdinalIgnoreCase))
+            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Да", "Нет" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("Ожидаемая сумма", StringComparison.OrdinalIgnoreCase))
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Ожидаемая сумма" }, new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("Без комментария", StringComparison.OrdinalIgnoreCase))
@@ -162,14 +164,20 @@ internal static class TelegramUi
             rows.Add(new KeyboardButton[] { "Отмена" });
             return new ReplyKeyboardMarkup(rows) { ResizeKeyboard = true, OneTimeKeyboard = true };
         }
-        if (response.Contains("Сохранить", StringComparison.OrdinalIgnoreCase))
-            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Да", "Нет" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("Оставить текущее", StringComparison.OrdinalIgnoreCase))
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Оставить текущее" }, new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("отмена", StringComparison.OrdinalIgnoreCase))
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         return null;
     }
+
+    private static string ActionLabel(string action) => action switch
+    {
+        "disable" => "⏸ Отключить",
+        "pay" => "✅ Оплатить",
+        "edit" => "✏️ Изменить",
+        _ => "Открыть"
+    };
 
     private static bool IsCompleted(string response) =>
         response.Contains("сохранен", StringComparison.OrdinalIgnoreCase)
