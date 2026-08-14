@@ -81,6 +81,16 @@ public sealed class PaymentRepository(PersonalAssistantDbContext db) : IPaymentR
     public Task AddTransactionAsync(PaymentTransaction transaction, CancellationToken cancellationToken) =>
         db.PaymentTransactions.AddAsync(transaction, cancellationToken).AsTask();
 
+    public async Task<IReadOnlyList<ReminderCandidate>> GetReminderCandidatesAsync(CancellationToken cancellationToken)
+    {
+        return await db.RecurringPayments
+            .AsNoTracking()
+            .Where(x => x.IsActive && x.NextPaymentDate.HasValue)
+            .Select(x => new ReminderCandidate(x.Id, x.UserId, x.User.TelegramChatId, x.Name, x.Amount, x.Currency,
+                x.NextPaymentDate!.Value, x.IsAutoDebit, x.User.TimeZoneId, x.User.ReminderTimeLocal, x.User.ReminderDaysBefore))
+            .ToListAsync(cancellationToken);
+    }
+
     public Task<RecurringPayment?> FindForOwnerAsync(Guid userId, Guid paymentId, CancellationToken cancellationToken) =>
         db.RecurringPayments.SingleOrDefaultAsync(x => x.UserId == userId && x.Id == paymentId, cancellationToken);
 
@@ -129,6 +139,27 @@ public sealed class PaymentRepository(PersonalAssistantDbContext db) : IPaymentR
         catch (DbUpdateConcurrencyException exception)
         {
             throw new PaymentConcurrencyException(exception);
+        }
+    }
+}
+
+public sealed class ReminderRepository(PersonalAssistantDbContext db) : IReminderRepository
+{
+    public async Task<bool> TryClaimAsync(Guid paymentId, DateOnly dueDate, DateOnly localDate, ReminderKind kind, DateTime claimedAtUtc, CancellationToken cancellationToken)
+    {
+        if (await db.Reminders.AnyAsync(x => x.RecurringPaymentId == paymentId && x.DueDate == dueDate && x.LocalDate == localDate && x.Kind == kind, cancellationToken))
+            return false;
+
+        await db.Reminders.AddAsync(Reminder.Create(paymentId, dueDate, localDate, kind, claimedAtUtc), cancellationToken);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+            return true;
+        }
+        catch (DbUpdateException)
+        {
+            db.ChangeTracker.Clear();
+            return false;
         }
     }
 }

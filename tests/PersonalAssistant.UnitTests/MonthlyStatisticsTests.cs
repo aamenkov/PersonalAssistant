@@ -76,6 +76,7 @@ public sealed class MonthlyStatisticsTests
                 .ToList());
 
         public Task SaveChangesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<IReadOnlyList<ReminderCandidate>> GetReminderCandidatesAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<ReminderCandidate>>([]);
         public Task<bool> HasTransactionForPeriodAsync(Guid userId, Guid paymentId, string paidPeriod, CancellationToken cancellationToken) => Task.FromResult(false);
     }
 }

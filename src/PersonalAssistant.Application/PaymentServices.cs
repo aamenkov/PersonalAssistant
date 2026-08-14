@@ -13,6 +13,7 @@ public interface IPaymentRepository
     Task<IReadOnlyList<PaymentTransaction>> GetTransactionsForOwnerAsync(Guid userId, Guid? paymentId, DateOnly? from, DateOnly? to, CancellationToken cancellationToken);
     Task<bool> HasTransactionForPeriodAsync(Guid userId, Guid paymentId, string paidPeriod, CancellationToken cancellationToken);
     Task SaveChangesAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<ReminderCandidate>> GetReminderCandidatesAsync(CancellationToken cancellationToken);
 }
 
 public interface IConversationStateRepository
@@ -57,6 +58,16 @@ public static class UserInputParser
 }
 
 public sealed record PaymentListItem(Guid Id, string Name, decimal Amount, string Currency, DateOnly DueDate, RecurrenceUnit RecurrenceUnit, PaymentMethod PaymentMethod, bool IsAutoDebit);
+
+public sealed record UpcomingPaymentItem(
+    Guid Id,
+    string Name,
+    decimal Amount,
+    string Currency,
+    DateOnly DueDate,
+    RecurrenceUnit RecurrenceUnit,
+    bool IsOverdue,
+    int DaysFromToday);
 
 public sealed record PaymentDetails(
     Guid Id,
@@ -119,6 +130,39 @@ public sealed class PaymentService(IPaymentRepository payments)
             .OrderBy(x => x.NextPaymentDate)
             .Select(x => new PaymentListItem(x.Id, x.Name, x.Amount, x.Currency, x.NextPaymentDate!.Value, x.RecurrenceUnit, x.PaymentMethod, x.IsAutoDebit))
             .ToList();
+    }
+
+    public async Task<IReadOnlyList<UpcomingPaymentItem>> GetUpcomingAsync(
+        Guid userId,
+        DateOnly today,
+        int windowDays,
+        CancellationToken cancellationToken)
+    {
+        var entities = await payments.GetActiveAsync(userId, null, null, cancellationToken);
+        var ordered = entities
+            .Where(x => x.NextPaymentDate.HasValue)
+            .Select(x => new UpcomingPaymentItem(
+                x.Id,
+                x.Name,
+                x.Amount,
+                x.Currency,
+                x.NextPaymentDate!.Value,
+                x.RecurrenceUnit,
+                x.NextPaymentDate.Value < today,
+                x.NextPaymentDate.Value.DayNumber - today.DayNumber))
+            .OrderBy(x => x.IsOverdue ? 0 : 1)
+            .ThenBy(x => x.DueDate)
+            .ToList();
+
+        var result = ordered.Where(x => x.IsOverdue || x.DueDate <= today.AddDays(windowDays)).ToList();
+        if (result.All(x => x.IsOverdue || x.DueDate <= today.AddDays(windowDays)))
+        {
+            var next = ordered.FirstOrDefault(x => !x.IsOverdue && x.DueDate > today.AddDays(windowDays));
+            if (next is not null)
+                result.Add(next);
+        }
+
+        return result;
     }
 
     public async Task<PaymentDetails?> GetDetailsAsync(Guid userId, Guid paymentId, CancellationToken cancellationToken)

@@ -70,9 +70,48 @@ public sealed class PaymentServiceTests
         Assert.Equal(PaymentRecordStatus.SaveConflict, result.Status);
     }
 
+    [Fact]
+    public async Task GetUpcomingAsync_PrioritizesOverdueAndAddsNextPaymentOutsideWindow()
+    {
+        var repository = new InMemoryPaymentRepository();
+        var userId = Guid.NewGuid();
+        repository.Items.Add(RecurringPayment.Create(userId, "Внутри окна", 100, "RUB", 1, RecurrenceUnit.Month,
+            new DateOnly(2026, 8, 16), DateTime.UtcNow));
+        repository.Items.Add(RecurringPayment.Create(userId, "Просрочен", 200, "RUB", 1, RecurrenceUnit.Month,
+            new DateOnly(2026, 8, 10), DateTime.UtcNow));
+        repository.Items.Add(RecurringPayment.Create(userId, "Следующий", 300, "RUB", 1, RecurrenceUnit.Month,
+            new DateOnly(2026, 9, 12), DateTime.UtcNow));
+
+        var result = await new PaymentService(repository).GetUpcomingAsync(
+            userId, new DateOnly(2026, 8, 14), 6, CancellationToken.None);
+
+        Assert.Equal(["Просрочен", "Внутри окна", "Следующий"], result.Select(x => x.Name));
+        Assert.True(result[0].IsOverdue);
+        Assert.Equal(29, result[2].DaysFromToday);
+    }
+
+    [Fact]
+    public async Task ReminderService_ClaimsDueReminderOnlyOnce()
+    {
+        var payments = new InMemoryPaymentRepository();
+        payments.ReminderCandidates.Add(new ReminderCandidate(
+            Guid.NewGuid(), Guid.NewGuid(), 123, "Internet", 400, "RUB",
+            new DateOnly(2026, 8, 17), false, "UTC", new TimeOnly(9), 3));
+        var reminderRepository = new InMemoryReminderRepository();
+        var service = new ReminderService(payments, reminderRepository);
+
+        var first = await service.GetDueAsync(new DateTime(2026, 8, 14, 9, 1, 0, DateTimeKind.Utc), CancellationToken.None);
+        var second = await service.GetDueAsync(new DateTime(2026, 8, 14, 9, 2, 0, DateTimeKind.Utc), CancellationToken.None);
+
+        Assert.Single(first);
+        Assert.Equal(ReminderKind.BeforeDue, first[0].Kind);
+        Assert.Empty(second);
+    }
+
     private sealed class InMemoryPaymentRepository : IPaymentRepository
     {
         public List<RecurringPayment> Items { get; } = [];
+        public List<ReminderCandidate> ReminderCandidates { get; } = [];
         public HashSet<(Guid PaymentId, string PaidPeriod)> PersistedPeriods { get; } = [];
         public bool ThrowConcurrencyOnSave { get; init; }
 
@@ -105,8 +144,17 @@ public sealed class PaymentServiceTests
         }
 
         public Task AddTransactionAsync(PaymentTransaction transaction, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<IReadOnlyList<ReminderCandidate>> GetReminderCandidatesAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<ReminderCandidate>>(ReminderCandidates);
 
         public Task<bool> HasTransactionForPeriodAsync(Guid userId, Guid paymentId, string paidPeriod, CancellationToken cancellationToken) =>
             Task.FromResult(PersistedPeriods.Contains((paymentId, paidPeriod)));
+    }
+
+    private sealed class InMemoryReminderRepository : IReminderRepository
+    {
+        private readonly HashSet<(Guid PaymentId, DateOnly DueDate, DateOnly LocalDate, ReminderKind Kind)> claims = [];
+
+        public Task<bool> TryClaimAsync(Guid paymentId, DateOnly dueDate, DateOnly localDate, ReminderKind kind, DateTime claimedAtUtc, CancellationToken cancellationToken) =>
+            Task.FromResult(claims.Add((paymentId, dueDate, localDate, kind)));
     }
 }
