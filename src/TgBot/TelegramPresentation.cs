@@ -1,4 +1,6 @@
 using System.Globalization;
+using PersonalAssistant.Application;
+using PersonalAssistant.Domain;
 
 namespace PersonalAssistant.Bot;
 
@@ -37,4 +39,52 @@ internal static class TelegramPresentation
         > 1 => $"через {days} дн.",
         _ => $"{Math.Abs(days)} дн. назад"
     };
+
+    public static string Schedule(int interval, RecurrenceUnit unit, DateOnly nextDate, DateOnly today)
+    {
+        var recurrence = PaymentDisplayNames.Recurrence(interval, unit);
+        return unit switch
+        {
+            RecurrenceUnit.Once => "Разовый платеж",
+            RecurrenceUnit.Week => $"{recurrence} по {Weekday(nextDate.DayOfWeek)}",
+            RecurrenceUnit.Year => $"{recurrence} {nextDate.Day} {nextDate.ToString("MMMM", Russian)}",
+            _ => $"{recurrence}, {nextDate.Day} числа"
+        };
+    }
+
+    private static string Weekday(DayOfWeek day) => day switch
+    {
+        DayOfWeek.Monday => "понедельникам",
+        DayOfWeek.Tuesday => "вторникам",
+        DayOfWeek.Wednesday => "средам",
+        DayOfWeek.Thursday => "четвергам",
+        DayOfWeek.Friday => "пятницам",
+        DayOfWeek.Saturday => "субботам",
+        _ => "воскресеньям"
+    };
+
+    public static string TimeZone(string timeZoneId)
+    {
+        try
+        {
+            var zone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+            var offset = zone.GetUtcOffset(DateTime.UtcNow);
+            var hours = offset.TotalHours >= 0 ? $"+{offset.TotalHours:0}" : $"{offset.TotalHours:0}";
+            var name = timeZoneId switch
+            {
+                "Europe/Moscow" => "Москва",
+                "Europe/Berlin" => "Берлин",
+                "Asia/Almaty" => "Алматы",
+                "Asia/Tokyo" => "Токио",
+                "America/New_York" => "Нью-Йорк",
+                "UTC" => "UTC",
+                _ => timeZoneId
+            };
+            return $"{name} · UTC{hours}";
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return "не настроен";
+        }
+    }
 }

@@ -137,6 +137,28 @@ public sealed class PrelaunchAuditTests
         Assert.Equal("Internet", payment.Name);
     }
 
+    [Fact]
+    public async Task PaymentEditConversation_CanChangeOnlyAmount()
+    {
+        var userId = Guid.NewGuid();
+        var payment = RecurringPayment.Create(userId, "Internet", 30, "RUB", 1, RecurrenceUnit.Month,
+            new DateOnly(2026, 8, 20), DateTime.UtcNow);
+        var paymentRepository = new InMemoryPaymentRepository();
+        paymentRepository.Items.Add(payment);
+        var states = new InMemoryConversationStateRepository();
+        var service = new PaymentEditConversationService(states, new PaymentService(paymentRepository));
+
+        var prompt = await service.BeginFieldAsync(userId, payment.Id, "amount", new DateOnly(2026, 8, 14), CancellationToken.None);
+        var result = await service.HandleInputAsync(userId, "42", CancellationToken.None);
+
+        Assert.Contains("Текущая сумма", prompt);
+        Assert.Contains("обновлен", result);
+        Assert.Equal(42, payment.Amount);
+        Assert.Equal("Internet", payment.Name);
+        Assert.Equal(RecurrenceUnit.Month, payment.RecurrenceUnit);
+        Assert.Null(states.State);
+    }
+
     private sealed class InMemoryConversationStateRepository(ConversationState? state = null) : IConversationStateRepository
     {
         public ConversationState? State { get; private set; } = state;

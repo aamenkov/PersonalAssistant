@@ -12,6 +12,7 @@ public static class DateShortcutCalculator
         {
             "сегодня" => today,
             "завтра" => Tomorrow(today),
+            "через неделю" => today.AddDays(7),
             "первое число следующего месяца" => FirstDayOfNextMonth(today),
             "то же число следующего месяца" => SameDayNextMonth(today),
             _ => default

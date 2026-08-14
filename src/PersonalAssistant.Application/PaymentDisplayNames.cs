@@ -4,6 +4,15 @@ namespace PersonalAssistant.Application;
 
 public static class PaymentDisplayNames
 {
+    public static string Recurrence(int interval, RecurrenceUnit unit) => unit switch
+    {
+        RecurrenceUnit.Week => interval == 1 ? "каждую неделю" : $"каждые {interval} недели",
+        RecurrenceUnit.Month => interval == 1 ? "каждый месяц" : $"каждые {interval} месяца",
+        RecurrenceUnit.Year => interval == 1 ? "каждый год" : $"каждые {interval} года",
+        RecurrenceUnit.Once => "разовый платеж",
+        _ => "расписание не указано"
+    };
+
     public static string Recurrence(RecurrenceUnit unit) => unit switch
     {
         RecurrenceUnit.Week => "еженедельно",
