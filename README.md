@@ -48,6 +48,7 @@ docker compose config
 - [Будущие задачи](TODO.md)
 - [Инструкции для AI-агентов](AGENTS.md)
 - [Установка и эксплуатация](docs/DEPLOYMENT.md)
+- [Универсальные Telegram UX/UI Guidelines](docs/telegram-ux-guidelines.md)
 - [Архив выполненных задач](docs/tasks/)
 
 ## Команды бота

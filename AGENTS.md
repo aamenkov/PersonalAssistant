@@ -85,7 +85,7 @@ Solution: `PersonalAssistant.sln`.
 
 Если задача касается БД, сначала найти интерфейс репозитория в Application, затем реализацию в Infrastructure, миграции и интеграционные тесты.
 
-Подробнее о взаимодействии слоев см. `ARCHITECTURE.md`; не дублировать его в этом файле.
+Подробнее о взаимодействии слоев см. `ARCHITECTURE.md`; общие переносимые правила Telegram UX см. `docs/telegram-ux-guidelines.md`. Не дублировать эти документы в `AGENTS.md`.
 
 ## Architecture Rules
 
