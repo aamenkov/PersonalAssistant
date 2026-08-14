@@ -20,6 +20,8 @@ builder.Services.AddScoped<UserRegistrationService>();
 builder.Services.AddScoped<UserTimeZoneService>();
 builder.Services.AddScoped<UserSettingsService>();
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
+builder.Services.AddScoped<IReminderRepository, ReminderRepository>();
+builder.Services.AddScoped<ReminderService>();
 builder.Services.AddScoped<IConversationStateRepository, ConversationStateRepository>();
 builder.Services.AddScoped<PaymentService>();
 builder.Services.AddScoped<PaymentConversationService>();
@@ -29,6 +31,7 @@ builder.Services.AddSingleton<UserUpdateGate>();
 builder.Services.AddSingleton(BotAccessPolicy.Parse(builder.Configuration["Telegram:AllowedUserIds"]));
 builder.Services.AddSingleton<ITelegramBotClient>(_ => new TelegramBotClient(botToken));
 builder.Services.AddHostedService<TelegramPollingService>();
+builder.Services.AddHostedService<ReminderBackgroundService>();
 
 var app = builder.Build();
 await ApplyMigrationsAsync(app);
@@ -138,6 +141,21 @@ internal sealed class TelegramPollingService(
                             {
                                 InlineKeyboardButton.WithCallbackData("Да, отключить", $"payment:disable-confirm:{paymentId}"),
                                 InlineKeyboardButton.WithCallbackData("Отмена", $"payment:disable-cancel:{Guid.Empty}")
+                            }
+                        }), cancellationToken: cancellationToken);
+                return;
+            }
+
+            if (parts[1] == "more")
+            {
+                await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
+                if (update.CallbackQuery.Message is { } message)
+                    await client.SendMessage(message.Chat.Id, "Дополнительные действия:",
+                        replyMarkup: new InlineKeyboardMarkup(new[]
+                        {
+                            new[]
+                            {
+                                InlineKeyboardButton.WithCallbackData("⏸ Отключить", TelegramCallbackData.Payment("disable", paymentId))
                             }
                         }), cancellationToken: cancellationToken);
                 return;
@@ -287,7 +305,24 @@ internal sealed class TelegramPollingService(
             var conversations = scope.ServiceProvider.GetRequiredService<PaymentConversationService>();
             await client.SendMessage(update.Message.Chat.Id, await conversations.BeginAsync(user.Id, user.DefaultCurrency, LocalDate(user.TimeZoneId), cancellationToken), replyMarkup: AddStepKeyboard("Введите название платежа:"), cancellationToken: cancellationToken);
         }
-        else if (command is "/payments" or "/upcoming")
+        else if (command == "/upcoming")
+        {
+            using var scope = scopeFactory.CreateScope();
+            var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+            var user = await users.FindByTelegramUserIdAsync(from.Id, cancellationToken);
+            if (user is null)
+            {
+                await client.SendMessage(update.Message.Chat.Id, "Сначала выполните /start.", cancellationToken: cancellationToken);
+                return;
+            }
+
+            var today = LocalDate(user.TimeZoneId);
+            var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
+            var items = await payments.GetUpcomingAsync(user.Id, today, 6, cancellationToken);
+            await client.SendMessage(update.Message.Chat.Id, TelegramUi.FormatUpcoming(items, today, 6),
+                replyMarkup: TelegramUi.UpcomingKeyboard(items), cancellationToken: cancellationToken);
+        }
+        else if (command == "/payments")
         {
             using var scope = scopeFactory.CreateScope();
             var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
@@ -299,11 +334,9 @@ internal sealed class TelegramPollingService(
             }
 
             var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
-            var isUpcoming = command == "/upcoming";
-            var today = LocalDate(user.TimeZoneId);
-            var items = await payments.GetActiveAsync(user.Id, isUpcoming ? today : null, isUpcoming ? today.AddDays(6) : null, cancellationToken);
-            await client.SendMessage(update.Message.Chat.Id, FormatPayments(items, isUpcoming),
-                replyMarkup: isUpcoming ? null : PaymentActionKeyboard(items, "disable"), cancellationToken: cancellationToken);
+            var items = await payments.GetActiveAsync(user.Id, null, null, cancellationToken);
+            await client.SendMessage(update.Message.Chat.Id, FormatPayments(items, false),
+                replyMarkup: TelegramUi.PaymentOverviewKeyboard(items), cancellationToken: cancellationToken);
         }
         else if (command is "/edit" or "/disable" or "/pay")
         {

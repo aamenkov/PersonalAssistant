@@ -42,10 +42,9 @@ internal static class TelegramUi
 
     public static ReplyKeyboardMarkup MainMenuKeyboard() => new(new[]
     {
-        new KeyboardButton[] { "Предстоящие платежи", "Мои платежи" },
-        new KeyboardButton[] { "Добавить платеж", "Отметить оплату" },
-        new KeyboardButton[] { "Статистика", "История" },
-        new KeyboardButton[] { "Настройки", "Помощь" }
+        new KeyboardButton[] { "💳 Ближайшие платежи", "➕ Добавить платеж" },
+        new KeyboardButton[] { "📋 Все платежи", "📊 Статистика" },
+        new KeyboardButton[] { "⚙️ Настройки" }
     }) { ResizeKeyboard = true };
 
     public static ReplyKeyboardMarkup? ConversationKeyboard(string response) =>
@@ -56,9 +55,35 @@ internal static class TelegramUi
         if (payments.Count == 0)
             return upcoming ? "На ближайшие 7 дней платежей нет." : "Активных платежей пока нет.";
 
-        var title = upcoming ? "Предстоящие платежи:" : "Активные платежи:";
-        var lines = payments.Select(x => $"• {x.Name} — {x.Amount:0.##} {x.Currency}, {x.DueDate:dd.MM.yyyy} ({PaymentDisplayNames.Recurrence(x.RecurrenceUnit)})");
+        var title = upcoming ? "💳 Предстоящие платежи:" : $"📋 Активные платежи — {payments.Count}";
+        var lines = payments.Select(x =>
+            $"{x.Name}\n{TelegramPresentation.Money(x.Amount, x.Currency)} · {PaymentDisplayNames.Recurrence(x.RecurrenceUnit)}\nСледующий: {TelegramPresentation.Date(x.DueDate, DateOnly.MinValue)}");
         return title + "\n" + string.Join("\n", lines);
+    }
+
+    public static string FormatUpcoming(IReadOnlyList<UpcomingPaymentItem> payments, DateOnly today, int windowDays)
+    {
+        if (payments.Count == 0)
+            return "💳 Ближайшие платежи\n\nАктивных платежей пока нет.";
+
+        var visible = payments.Where(x => x.IsOverdue || x.DueDate <= today.AddDays(windowDays)).ToList();
+        var next = payments.FirstOrDefault(x => !x.IsOverdue && x.DueDate > today.AddDays(windowDays));
+        var sections = new List<string> { "💳 Ближайшие платежи" };
+        if (visible.Count == 0)
+            sections.Add("На ближайшие 7 дней платить ничего не нужно 👍");
+
+        foreach (var payment in visible)
+        {
+            var status = payment.IsOverdue
+                ? $"⚠️ ПРОСРОЧЕНО НА {Math.Abs(payment.DaysFromToday)} дн.\nНужно было оплатить до {TelegramPresentation.Date(payment.DueDate, today)}"
+                : $"📅 {TelegramPresentation.Date(payment.DueDate, today)} · {TelegramPresentation.RelativeDays(payment.DaysFromToday)}";
+            sections.Add($"{(payment.IsOverdue ? "⚠️" : "💳")} {payment.Name}\n{TelegramPresentation.Money(payment.Amount, payment.Currency)}\n{status}");
+        }
+
+        if (next is not null)
+            sections.Add($"Следующий платеж:\n\n💳 {next.Name}\n{TelegramPresentation.Money(next.Amount, next.Currency)}\n📅 {TelegramPresentation.Date(next.DueDate, today, true)} · {TelegramPresentation.RelativeDays(next.DaysFromToday)}");
+
+        return string.Join("\n\n", sections);
     }
 
     public static InlineKeyboardMarkup PaymentActionKeyboard(IReadOnlyList<PaymentListItem> payments, string action) =>
@@ -67,13 +92,33 @@ internal static class TelegramUi
             InlineKeyboardButton.WithCallbackData($"{ActionLabel(action)}: {payment.Name} — {payment.Amount:0.##} {payment.Currency}", TelegramCallbackData.Payment(action, payment.Id))
         }));
 
+    public static InlineKeyboardMarkup PaymentOverviewKeyboard(IReadOnlyList<PaymentListItem> payments) =>
+        new(payments.SelectMany(payment => new[]
+        {
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("✅ Оплатил", TelegramCallbackData.Payment("pay", payment.Id)),
+                InlineKeyboardButton.WithCallbackData("✏️ Изменить", TelegramCallbackData.Payment("edit", payment.Id)),
+                InlineKeyboardButton.WithCallbackData("⋯", TelegramCallbackData.Payment("more", payment.Id))
+            }
+        }));
+
+    public static InlineKeyboardMarkup UpcomingKeyboard(IReadOnlyList<UpcomingPaymentItem> payments) =>
+        new(payments.Select(payment => new[]
+        {
+            InlineKeyboardButton.WithCallbackData($"✅ Оплатил: {payment.Name}", TelegramCallbackData.Payment("pay", payment.Id))
+        }));
+
     public static string FormatHistory(IReadOnlyList<PaymentTransactionItem> history)
     {
         if (history.Count == 0)
             return "История оплат пока пуста.";
 
-        var lines = history.Select(x => $"• {x.PaidDate:dd.MM.yyyy} — {x.PaymentName}: {x.PaidAmount:0.##} {x.Currency} (период {x.PaidPeriod})");
-        return "История оплат:\n" + string.Join("\n", lines);
+        var lines = history.Select(x =>
+            $"✅ {x.PaymentName} — {TelegramPresentation.Money(x.PaidAmount, x.Currency)}\n" +
+            $"Оплачено {TelegramPresentation.Date(x.PaidDate, DateOnly.MinValue)}\n" +
+            $"Платеж за {PaymentMonth(x.PaidPeriod)}");
+        return "📜 История оплат:\n\n" + string.Join("\n\n", lines);
     }
 
     public static string FormatStatistics(int year, int month, IReadOnlyList<MonthlyStatisticsCurrency> statistics)
@@ -81,17 +126,24 @@ internal static class TelegramUi
         if (statistics.Count == 0)
             return $"Статистика за {year:D4}-{month:D2}: платежей и оплат нет.";
 
+        var title = new DateOnly(year, month, 1).ToDateTime(TimeOnly.MinValue)
+            .ToString("MMMM yyyy", System.Globalization.CultureInfo.GetCultureInfo("ru-RU"));
         var lines = statistics.Select(x =>
-            $"{x.Currency}:\n" +
-            $"  Запланировано: {x.PlannedAmount:0.##} ({x.PlannedCount})\n" +
-            $"  Оплачено: {x.PaidAmount:0.##} ({x.PaidCount})\n" +
-            $"  Осталось: {x.RemainingAmount:0.##}\n" +
-            $"  Не оплачено платежей: {x.UnpaidCount}");
-        return $"Статистика за {year:D4}-{month:D2}:\n" + string.Join("\n", lines);
+            $"📊 {title}\n\n" +
+            $"Запланировано: {TelegramPresentation.Money(x.PlannedAmount, x.Currency)}\n" +
+            $"✅ Оплачено: {TelegramPresentation.Money(x.PaidAmount, x.Currency)}\n" +
+            $"⏳ Осталось: {TelegramPresentation.Money(x.RemainingAmount, x.Currency)}\n\n" +
+            (x.UnpaidCount == 0 ? "Все платежи оплачены 🎉" : $"Не оплачено платежей: {x.UnpaidCount}"));
+        return string.Join("\n\n", lines);
     }
 
     public static string? GetCommand(string text) => text.Trim() switch
     {
+        "💳 Ближайшие платежи" => "/upcoming",
+        "➕ Добавить платеж" => "/add",
+        "📋 Все платежи" => "/payments",
+        "📊 Статистика" => "/stats",
+        "⚙️ Настройки" => "/settings",
         "Предстоящие платежи" => "/upcoming",
         "Мои платежи" => "/payments",
         "Добавить платеж" => "/add",
@@ -185,6 +237,13 @@ internal static class TelegramUi
         || response.Contains("отменено", StringComparison.OrdinalIgnoreCase)
         || response.Contains("отменена", StringComparison.OrdinalIgnoreCase)
         || response.Contains("отменены", StringComparison.OrdinalIgnoreCase);
+
+    private static string PaymentMonth(string paidPeriod)
+    {
+        return DateOnly.TryParseExact(paidPeriod, "yyyy-MM-dd", out var date)
+            ? date.ToDateTime(TimeOnly.MinValue).ToString("MMMM", System.Globalization.CultureInfo.GetCultureInfo("ru-RU"))
+            : "указанный период";
+    }
 
     private static string? GetSlashCommand(string text)
     {

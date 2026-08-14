@@ -221,6 +221,15 @@ public sealed class Reminder
 {
     private Reminder() { }
 
+    public static Reminder Create(Guid recurringPaymentId, DateOnly dueDate, DateOnly localDate, ReminderKind kind, DateTime sentAtUtc) => new()
+    {
+        RecurringPaymentId = recurringPaymentId,
+        DueDate = dueDate,
+        LocalDate = localDate,
+        Kind = kind,
+        SentAtUtc = sentAtUtc
+    };
+
     public Guid Id { get; private set; } = Guid.NewGuid();
     public Guid RecurringPaymentId { get; private set; }
     public RecurringPayment RecurringPayment { get; private set; } = null!;
