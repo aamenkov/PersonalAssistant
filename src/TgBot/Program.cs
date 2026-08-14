@@ -302,7 +302,8 @@ internal sealed class TelegramPollingService(
             var isUpcoming = command == "/upcoming";
             var today = LocalDate(user.TimeZoneId);
             var items = await payments.GetActiveAsync(user.Id, isUpcoming ? today : null, isUpcoming ? today.AddDays(6) : null, cancellationToken);
-            await client.SendMessage(update.Message.Chat.Id, FormatPayments(items, isUpcoming), cancellationToken: cancellationToken);
+            await client.SendMessage(update.Message.Chat.Id, FormatPayments(items, isUpcoming),
+                replyMarkup: isUpcoming ? null : PaymentActionKeyboard(items, "disable"), cancellationToken: cancellationToken);
         }
         else if (command is "/edit" or "/disable" or "/pay")
         {
