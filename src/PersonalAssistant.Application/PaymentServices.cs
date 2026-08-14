@@ -57,7 +57,7 @@ public static class UserInputParser
     }
 }
 
-public sealed record PaymentListItem(Guid Id, string Name, decimal Amount, string Currency, DateOnly DueDate, RecurrenceUnit RecurrenceUnit, PaymentMethod PaymentMethod, bool IsAutoDebit);
+public sealed record PaymentListItem(Guid Id, string Name, decimal Amount, string Currency, DateOnly DueDate, int RecurrenceInterval, RecurrenceUnit RecurrenceUnit, PaymentMethod PaymentMethod, bool IsAutoDebit);
 
 public sealed record UpcomingPaymentItem(
     Guid Id,
@@ -128,7 +128,7 @@ public sealed class PaymentService(IPaymentRepository payments)
         return entities
             .Where(x => x.NextPaymentDate.HasValue)
             .OrderBy(x => x.NextPaymentDate)
-            .Select(x => new PaymentListItem(x.Id, x.Name, x.Amount, x.Currency, x.NextPaymentDate!.Value, x.RecurrenceUnit, x.PaymentMethod, x.IsAutoDebit))
+            .Select(x => new PaymentListItem(x.Id, x.Name, x.Amount, x.Currency, x.NextPaymentDate!.Value, x.RecurrenceInterval, x.RecurrenceUnit, x.PaymentMethod, x.IsAutoDebit))
             .ToList();
     }
 
@@ -318,7 +318,7 @@ public sealed class PaymentConversationService(
         else
             await states.AddAsync(ConversationState.Create(userId, ConversationKind.AddPayment, payload, DateTime.UtcNow), cancellationToken);
         await states.SaveChangesAsync(cancellationToken);
-        return "Введите название платежа:";
+        return "➕ Новый платеж\n\nКак называется платеж?";
     }
 
     public async Task<string?> HandleInputAsync(Guid userId, string input, CancellationToken cancellationToken)
@@ -363,10 +363,10 @@ public sealed class PaymentConversationService(
                     draft.Step = PaymentDraftStep.Confirmation;
                     break;
                 }
-                if (!DateOnly.TryParseExact(input, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var nextDate))
-                    return "Введите дату в формате `ГГГГ-ММ-ДД`, например `2026-08-15`:";
+                if (!DateOnly.TryParseExact(input, new[] { "dd.MM.yyyy", "yyyy-MM-dd" }, CultureInfo.InvariantCulture, DateTimeStyles.None, out var nextDate))
+                    return "Не получилось распознать дату. Введите, например: 26.09.2026";
                 if (nextDate < draft.Today)
-                    return $"Дата не может быть в прошлом. Укажите дату начиная с {draft.Today:yyyy-MM-dd}:";
+                    return $"Дата не может быть в прошлом. Укажите дату начиная с {draft.Today:dd.MM.yyyy}:";
                 draft.NextPaymentDate = nextDate;
                 draft.Step = PaymentDraftStep.Confirmation;
                 break;
@@ -391,9 +391,9 @@ public sealed class PaymentConversationService(
         return draft.Step switch
         {
             PaymentDraftStep.Amount => "Введите сумму:",
-            PaymentDraftStep.Recurrence => "Выберите периодичность:",
-            PaymentDraftStep.NextPaymentDate => "Выберите «Сегодня» или введите дату следующего платежа в формате ГГГГ-ММ-ДД:",
-            PaymentDraftStep.Confirmation => $"Проверьте платеж:\n{draft.Name} — {draft.Amount:0.##} {draft.Currency}\nДата: {draft.NextPaymentDate:yyyy-MM-dd}\nПериодичность: {PaymentDisplayNames.Recurrence(draft.RecurrenceUnit!.Value)}\n\nСохранить платеж?",
+            PaymentDraftStep.Recurrence => "Как часто нужно платить?",
+            PaymentDraftStep.NextPaymentDate => "📅 Когда следующий платеж? Выберите кнопку или введите дату, например 26.09.2026:",
+            PaymentDraftStep.Confirmation => $"Проверьте платеж:\n\n{draft.Name}\n{draft.Amount:0.##} {draft.Currency}\n{PaymentDisplayNames.Recurrence(1, draft.RecurrenceUnit!.Value)}\nСледующий платеж: {draft.NextPaymentDate:dd.MM.yyyy}\n\nСохранить платеж?",
             _ => "Введите название платежа:"
         };
     }
@@ -402,10 +402,10 @@ public sealed class PaymentConversationService(
     {
         unit = input.ToLowerInvariant() switch
         {
-            "weekly" or "еженедельно" or "неделя" => RecurrenceUnit.Week,
-            "monthly" or "ежемесячно" or "месяц" => RecurrenceUnit.Month,
-            "yearly" or "annually" or "ежегодно" or "год" => RecurrenceUnit.Year,
-            "once" or "однократно" or "один раз" => RecurrenceUnit.Once,
+            "weekly" or "еженедельно" or "неделя" or "каждую неделю" => RecurrenceUnit.Week,
+            "monthly" or "ежемесячно" or "месяц" or "каждый месяц" => RecurrenceUnit.Month,
+            "yearly" or "annually" or "ежегодно" or "год" or "каждый год" => RecurrenceUnit.Year,
+            "once" or "однократно" or "один раз" or "разовый платеж" => RecurrenceUnit.Once,
             _ => (RecurrenceUnit)(-1)
         };
         return unit >= RecurrenceUnit.Once;
@@ -443,6 +443,35 @@ public sealed class PaymentEditConversationService(
             return "Платеж не найден или уже отключен.";
 
         var draft = PaymentEditDraft.From(payment, localToday);
+        draft.Step = PaymentEditStep.Menu;
+        var existing = await states.FindAsync(userId, cancellationToken);
+        var payload = JsonSerializer.Serialize(draft);
+        if (existing is not null)
+            existing.Reset(ConversationKind.EditPayment, payload, DateTime.UtcNow);
+        else
+            await states.AddAsync(ConversationState.Create(userId, ConversationKind.EditPayment, payload, DateTime.UtcNow), cancellationToken);
+        await states.SaveChangesAsync(cancellationToken);
+        return Prompt(draft);
+    }
+
+    public async Task<string> BeginFieldAsync(Guid userId, Guid paymentId, string field, DateOnly localToday, CancellationToken cancellationToken)
+    {
+        var payment = await payments.GetDetailsAsync(userId, paymentId, cancellationToken);
+        if (payment is null)
+            return "Платеж не найден или уже отключен.";
+
+        var draft = PaymentEditDraft.From(payment, localToday);
+        draft.Step = PaymentEditStep.Menu;
+        draft.Step = field.ToLowerInvariant() switch
+        {
+            "amount" => PaymentEditStep.FieldAmount,
+            "schedule" => PaymentEditStep.FieldScheduleRecurrence,
+            "method" => PaymentEditStep.FieldMethod,
+            "autopay" => PaymentEditStep.FieldAutoDebit,
+            "name" => PaymentEditStep.FieldName,
+            "comment" => PaymentEditStep.FieldDescription,
+            _ => PaymentEditStep.Menu
+        };
         var existing = await states.FindAsync(userId, cancellationToken);
         var payload = JsonSerializer.Serialize(draft);
         if (existing is not null)
@@ -478,6 +507,48 @@ public sealed class PaymentEditConversationService(
 
         switch (draft.Step)
         {
+            case PaymentEditStep.Menu:
+                // Compatibility with the previous sequential flow.
+                draft.Step = keepCurrent ? PaymentEditStep.Amount : PaymentEditStep.Name;
+                break;
+            case PaymentEditStep.FieldAmount:
+                if (!UserInputParser.TryParsePositiveAmount(input, out var fieldAmount))
+                    return "Введите положительную сумму, например 2 000 или 2000,50:";
+                draft.Amount = fieldAmount;
+                return await SaveFieldAsync(userId, state, draft, cancellationToken);
+            case PaymentEditStep.FieldSchedule:
+                if (!DateOnly.TryParseExact(input, new[] { "dd.MM.yyyy", "yyyy-MM-dd" }, CultureInfo.InvariantCulture, DateTimeStyles.None, out var fieldDate))
+                    return "Введите дату в формате ДД.ММ.ГГГГ, например 26.09.2026:";
+                if (fieldDate < draft.Today)
+                    return $"Дата не может быть в прошлом. Укажите дату начиная с {draft.Today:dd.MM.yyyy}:";
+                draft.NextPaymentDate = fieldDate;
+                return await SaveFieldAsync(userId, state, draft, cancellationToken);
+            case PaymentEditStep.FieldScheduleRecurrence:
+                if (!TryParseRecurrence(input, out var fieldRecurrence))
+                    return "Выберите периодичность кнопкой ниже:";
+                draft.RecurrenceUnit = fieldRecurrence;
+                draft.Step = PaymentEditStep.FieldSchedule;
+                state.UpdatePayload(JsonSerializer.Serialize(draft), DateTime.UtcNow);
+                await states.SaveChangesAsync(cancellationToken);
+                return Prompt(draft);
+            case PaymentEditStep.FieldMethod:
+                if (!TryParsePaymentMethod(input, out var fieldMethod))
+                    return "Выберите способ оплаты: карта, банковский перевод, наличные или другое.";
+                draft.PaymentMethod = fieldMethod;
+                return await SaveFieldAsync(userId, state, draft, cancellationToken);
+            case PaymentEditStep.FieldAutoDebit:
+                if (!TryParseBoolean(input, out var fieldAutoDebit))
+                    return "Выберите «Да» или «Нет»:";
+                draft.IsAutoDebit = fieldAutoDebit;
+                return await SaveFieldAsync(userId, state, draft, cancellationToken);
+            case PaymentEditStep.FieldName:
+                if (string.IsNullOrWhiteSpace(input))
+                    return "Название не может быть пустым. Введите новое название:";
+                draft.Name = input;
+                return await SaveFieldAsync(userId, state, draft, cancellationToken);
+            case PaymentEditStep.FieldDescription:
+                draft.Description = input.Equals("без комментария", StringComparison.OrdinalIgnoreCase) ? null : input;
+                return await SaveFieldAsync(userId, state, draft, cancellationToken);
             case PaymentEditStep.Name:
                 if (!keepCurrent)
                 {
@@ -589,6 +660,14 @@ public sealed class PaymentEditConversationService(
 
     private static string Prompt(PaymentEditDraft draft) => draft.Step switch
     {
+        PaymentEditStep.Menu => $"✏️ {draft.Name}\n\n{TelegramPresentationForEdit(draft)}\n\nЧто изменить?",
+        PaymentEditStep.FieldName => "Введите новое название:",
+        PaymentEditStep.FieldAmount => $"Текущая сумма: {draft.Amount:0.##} {draft.Currency}\n\nВведите новую сумму:",
+        PaymentEditStep.FieldScheduleRecurrence => "Как часто нужно платить?",
+        PaymentEditStep.FieldSchedule => $"Периодичность: {PaymentDisplayNames.Recurrence(draft.RecurrenceInterval, draft.RecurrenceUnit!.Value)}\n\nВведите следующую дату в формате ДД.ММ.ГГГГ:",
+        PaymentEditStep.FieldMethod => "Выберите новый способ оплаты:",
+        PaymentEditStep.FieldAutoDebit => "Автосписание включено?",
+        PaymentEditStep.FieldDescription => "Введите комментарий или нажмите «Без комментария»:",
         PaymentEditStep.Name => $"Название: {draft.Name}. Введите новое или нажмите «Оставить текущее»:",
         PaymentEditStep.Amount => $"Сумма: {draft.Amount:0.##}. Введите новую или нажмите «Оставить текущее»:",
         PaymentEditStep.Currency => $"Валюта: {draft.Currency}. Введите новую или нажмите «Оставить текущее»:",
@@ -602,14 +681,29 @@ public sealed class PaymentEditConversationService(
         _ => "Введите новое значение или выберите «Отмена»."
     };
 
+    private async Task<string> SaveFieldAsync(Guid userId, ConversationState state, PaymentEditDraft draft, CancellationToken cancellationToken)
+    {
+        var updated = new PaymentDetails(draft.PaymentId, draft.Name!, draft.Amount!.Value, draft.Currency!, draft.RecurrenceInterval,
+            draft.RecurrenceUnit!.Value, draft.NextPaymentDate!.Value, draft.PaymentMethod!.Value, draft.IsAutoDebit!.Value, draft.Description);
+        if (!await payments.UpdateAsync(userId, draft.PaymentId, updated, cancellationToken))
+            return "Платеж не найден или уже отключен.";
+        states.Remove(state);
+        await states.SaveChangesAsync(cancellationToken);
+        return $"✅ {draft.Name} обновлен. История оплат не изменена.";
+    }
+
+    private static string TelegramPresentationForEdit(PaymentEditDraft draft) =>
+        $"{draft.Amount:0.##} {draft.Currency}\n{PaymentDisplayNames.Recurrence(draft.RecurrenceInterval, draft.RecurrenceUnit!.Value)}, {draft.NextPaymentDate:dd.MM.yyyy}\n" +
+        $"Способ оплаты: {PaymentDisplayNames.PaymentMethod(draft.PaymentMethod!.Value)}\nАвтосписание: {(draft.IsAutoDebit == true ? "включено" : "выключено")}\nКомментарий: {draft.Description ?? "—"}";
+
     private static bool TryParseRecurrence(string input, out RecurrenceUnit unit)
     {
         unit = input.ToLowerInvariant() switch
         {
-            "weekly" or "еженедельно" or "неделя" => RecurrenceUnit.Week,
-            "monthly" or "ежемесячно" or "месяц" => RecurrenceUnit.Month,
-            "yearly" or "annually" or "ежегодно" or "год" => RecurrenceUnit.Year,
-            "once" or "однократно" or "один раз" => RecurrenceUnit.Once,
+            "weekly" or "еженедельно" or "неделя" or "каждую неделю" => RecurrenceUnit.Week,
+            "monthly" or "ежемесячно" or "месяц" or "каждый месяц" => RecurrenceUnit.Month,
+            "yearly" or "annually" or "ежегодно" or "год" or "каждый год" => RecurrenceUnit.Year,
+            "once" or "однократно" or "один раз" or "разовый платеж" => RecurrenceUnit.Once,
             _ => (RecurrenceUnit)(-1)
         };
         return unit >= RecurrenceUnit.Once;
@@ -670,6 +764,7 @@ public sealed class PaymentEditConversationService(
 
     private enum PaymentEditStep
     {
+        Menu,
         Name,
         Amount,
         Currency,
@@ -679,7 +774,14 @@ public sealed class PaymentEditConversationService(
         PaymentMethod,
         AutoDebit,
         Description,
-        Confirmation
+        Confirmation,
+        FieldAmount,
+        FieldScheduleRecurrence,
+        FieldSchedule,
+        FieldMethod,
+        FieldAutoDebit,
+        FieldName,
+        FieldDescription
     }
 }
 
