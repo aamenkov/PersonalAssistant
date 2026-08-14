@@ -28,84 +28,9 @@ tests/
 
 Подробности находятся в [ARCHITECTURE.md](ARCHITECTURE.md), требования — в [REQUIREMENTS.md](REQUIREMENTS.md), шаблон активной задачи — в [TASK.template.md](TASK.template.md). Активный `TASK.md` создается только внутри рабочей ветки.
 
-## Создание Telegram-бота
+## Запуск и эксплуатация
 
-1. Откройте официальный бот [@BotFather](https://t.me/BotFather).
-2. Выполните `/newbot`, задайте имя и username.
-3. Сохраните полученный токен локально. Не добавляйте его в Git, сообщения об ошибках или скриншоты.
-
-## Конфигурация
-
-Секреты не хранятся в Git. Приложение завершает запуск с понятной ошибкой, если токен или строка подключения пусты.
-
-Основные параметры:
-
-- `Telegram__BotToken` — токен BotFather для локального запуска;
-- `ConnectionStrings__Postgres` — строка подключения для локального запуска;
-- `TELEGRAM_BOT_TOKEN` — токен для Docker Compose;
-- `POSTGRES_PASSWORD` — пароль PostgreSQL для Docker Compose;
-- `TELEGRAM_ALLOWED_USER_IDS` — необязательный список разрешенных Telegram User ID через запятую.
-
-Если `TELEGRAM_ALLOWED_USER_IDS` пуст, бот принимает пользователей согласно обычной регистрации. После первого `/start` ID можно посмотреть в PostgreSQL и затем включить ограничение:
-
-```bash
-docker compose exec postgres psql -U personalassistant -d personalassistant -c 'SELECT "TelegramUserId", "Username" FROM "Users";'
-```
-
-## Запуск через Docker
-
-Создайте локальный `.env` из безопасного шаблона и заполните значения:
-
-```powershell
-Copy-Item .env.example .env
-docker compose up --build
-```
-
-Файл `.env` исключен из Git. После готовности PostgreSQL приложение автоматически применяет EF Core миграции и запускает Telegram polling. Логи можно посмотреть командой:
-
-```bash
-docker compose logs -f tgbot
-```
-
-Для первого smoke-теста:
-
-1. Убедитесь, что в логах есть `Database migrations applied` и `PersonalAssistant polling started`.
-2. Выполните `/start`, выберите часовой пояс и используйте появившееся главное меню.
-3. Создайте тестовый платеж через `/add`.
-4. Проверьте `/payments`, `/upcoming`, `/edit` и `/pay`.
-5. Проверьте `/history` и `/stats`.
-6. Дождитесь времени напоминания или временно настройте его в `/settings` и проверьте сообщение с кнопкой «Оплатил».
-7. После успешного теста задайте `TELEGRAM_ALLOWED_USER_IDS` и перезапустите контейнер.
-
-Остановка без удаления данных:
-
-```bash
-docker compose down
-```
-
-Volume PostgreSQL сохраняется. Команда `docker compose down -v` удаляет локальную базу и должна использоваться только осознанно.
-
-## Локальный запуск
-
-Настройте User Secrets:
-
-```bash
-dotnet user-secrets set "Telegram:BotToken" "replace-with-botfather-token" --project src/TgBot
-dotnet user-secrets set "ConnectionStrings:Postgres" "Host=localhost;Port=5432;Database=personalassistant;Username=personalassistant;Password=replace-me" --project src/TgBot
-```
-
-Запустите PostgreSQL, затем:
-
-```bash
-dotnet run --project src/TgBot
-```
-
-Миграции применяются автоматически. Для ручной проверки или разработки миграций:
-
-```powershell
-$env:ConnectionStrings__Postgres="Host=localhost;Port=5432;Database=personalassistant;Username=personalassistant;Password=replace-me"
-dotnet ef database update --project src/PersonalAssistant.Infrastructure --startup-project src/PersonalAssistant.Infrastructure
-```
+Инструкции по созданию Telegram-бота, конфигурации, установке на чистый VPS, первому запуску, обновлению, логам и резервному копированию вынесены в [DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Проверки
 
@@ -122,18 +47,8 @@ docker compose config
 - [Архитектура](ARCHITECTURE.md)
 - [Будущие задачи](TODO.md)
 - [Инструкции для AI-агентов](AGENTS.md)
-- [Архив завершенных задач](docs/tasks/001-project-foundation.md)
-- [Задача 002: часовой пояс](docs/tasks/002-timezone-onboarding.md)
-- [Задача 003: переименование проекта](docs/tasks/003-personal-assistant-naming.md)
-- [Задача 004: архив и Git workflow](docs/tasks/004-task-archive-workflow.md)
-- [Задача 005: создание и просмотр платежей](docs/tasks/005-payment-creation-and-listing.md)
-- [Задача 006: редактирование и отключение](docs/tasks/006-payment-editing.md)
-- [Задача 007: оплата и история](docs/tasks/007-payment-history.md)
-- [Задача 008: статистика и история за период](docs/tasks/008-statistics-history.md)
-- [Задача 009: аудит перед запуском](docs/tasks/009-prelaunch-audit.md)
-- [Задача 017: UX отметки оплаты](docs/tasks/017-payment-record-ux.md)
-- [Задача 018: исправления UI оплаты](docs/tasks/018-payment-ui-followup.md)
-- [Задача 019: UX ассистента и напоминания](docs/tasks/019-assistant-ux.md)
+- [Установка и эксплуатация](docs/DEPLOYMENT.md)
+- [Архив выполненных задач](docs/tasks/)
 
 ## Команды бота
 
