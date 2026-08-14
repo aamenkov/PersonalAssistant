@@ -165,6 +165,8 @@ public sealed class PrelaunchAuditTests
             return Task.CompletedTask;
         }
 
+        public Task AddTransactionAsync(PaymentTransaction transaction, CancellationToken cancellationToken) => Task.CompletedTask;
+
         public Task<RecurringPayment?> FindForOwnerAsync(Guid userId, Guid paymentId, CancellationToken cancellationToken) =>
             Task.FromResult(Items.SingleOrDefault(x => x.UserId == userId && x.Id == paymentId));
 
