@@ -7,6 +7,7 @@ namespace PersonalAssistant.Application;
 public interface IPaymentRepository
 {
     Task AddAsync(RecurringPayment payment, CancellationToken cancellationToken);
+    Task AddTransactionAsync(PaymentTransaction transaction, CancellationToken cancellationToken);
     Task<RecurringPayment?> FindForOwnerAsync(Guid userId, Guid paymentId, CancellationToken cancellationToken);
     Task<IReadOnlyList<RecurringPayment>> GetActiveAsync(Guid userId, DateOnly? from, DateOnly? to, CancellationToken cancellationToken);
     Task<IReadOnlyList<PaymentTransaction>> GetTransactionsForOwnerAsync(Guid userId, Guid? paymentId, DateOnly? from, DateOnly? to, CancellationToken cancellationToken);
@@ -171,7 +172,8 @@ public sealed class PaymentService(IPaymentRepository payments)
         if (!payment.IsActive)
             return new PaymentRecordResult(PaymentRecordStatus.PaymentUnavailable);
 
-        payment.RecordPayment(paidAmount, paidDate, paidPeriod, comment, DateTime.UtcNow);
+        var transaction = payment.RecordPayment(paidAmount, paidDate, paidPeriod, comment, DateTime.UtcNow);
+        await payments.AddTransactionAsync(transaction, cancellationToken);
         try
         {
             await payments.SaveChangesAsync(cancellationToken);

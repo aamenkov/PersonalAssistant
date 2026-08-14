@@ -78,6 +78,9 @@ public sealed class PaymentRepository(PersonalAssistantDbContext db) : IPaymentR
 {
     public Task AddAsync(RecurringPayment payment, CancellationToken cancellationToken) => db.RecurringPayments.AddAsync(payment, cancellationToken).AsTask();
 
+    public Task AddTransactionAsync(PaymentTransaction transaction, CancellationToken cancellationToken) =>
+        db.PaymentTransactions.AddAsync(transaction, cancellationToken).AsTask();
+
     public Task<RecurringPayment?> FindForOwnerAsync(Guid userId, Guid paymentId, CancellationToken cancellationToken) =>
         db.RecurringPayments.SingleOrDefaultAsync(x => x.UserId == userId && x.Id == paymentId, cancellationToken);
 

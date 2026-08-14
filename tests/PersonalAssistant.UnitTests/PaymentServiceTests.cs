@@ -104,6 +104,8 @@ public sealed class PaymentServiceTests
             return Task.CompletedTask;
         }
 
+        public Task AddTransactionAsync(PaymentTransaction transaction, CancellationToken cancellationToken) => Task.CompletedTask;
+
         public Task<bool> HasTransactionForPeriodAsync(Guid userId, Guid paymentId, string paidPeriod, CancellationToken cancellationToken) =>
             Task.FromResult(PersistedPeriods.Contains((paymentId, paidPeriod)));
     }
