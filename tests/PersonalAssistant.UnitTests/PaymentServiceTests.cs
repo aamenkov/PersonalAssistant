@@ -20,9 +20,61 @@ public sealed class PaymentServiceTests
         Assert.Equal(35, payment.Amount);
     }
 
+    [Fact]
+    public async Task RecordPaymentAsync_RecordsPaymentAndAdvancesNextDate()
+    {
+        var repository = new InMemoryPaymentRepository();
+        var userId = Guid.NewGuid();
+        var payment = RecurringPayment.Create(userId, "Internet", 35, "RUB", 1, RecurrenceUnit.Month,
+            new DateOnly(2026, 8, 15), DateTime.UtcNow);
+        repository.Items.Add(payment);
+
+        var result = await new PaymentService(repository).RecordPaymentAsync(
+            userId, payment.Id, 35, new DateOnly(2026, 8, 14), null, CancellationToken.None);
+
+        Assert.Equal(PaymentRecordStatus.Recorded, result.Status);
+        Assert.Equal(new DateOnly(2026, 9, 15), result.NextPaymentDate);
+        Assert.Single(payment.Transactions);
+    }
+
+    [Fact]
+    public async Task RecordPaymentAsync_WhenPeriodAlreadyRecorded_ReturnsIdempotentResult()
+    {
+        var repository = new InMemoryPaymentRepository();
+        var userId = Guid.NewGuid();
+        var payment = RecurringPayment.Create(userId, "Internet", 35, "RUB", 1, RecurrenceUnit.Month,
+            new DateOnly(2026, 8, 15), DateTime.UtcNow);
+        repository.Items.Add(payment);
+        repository.PersistedPeriods.Add((payment.Id, "2026-08-15"));
+
+        var result = await new PaymentService(repository).RecordPaymentAsync(
+            userId, payment.Id, 35, new DateOnly(2026, 8, 14), null, CancellationToken.None);
+
+        Assert.Equal(PaymentRecordStatus.AlreadyRecorded, result.Status);
+        Assert.Equal(new DateOnly(2026, 8, 15), payment.NextPaymentDate);
+        Assert.Empty(payment.Transactions);
+    }
+
+    [Fact]
+    public async Task RecordPaymentAsync_WhenSaveFailsWithoutPersistedTransaction_ReturnsRetryableConflict()
+    {
+        var repository = new InMemoryPaymentRepository { ThrowConcurrencyOnSave = true };
+        var userId = Guid.NewGuid();
+        var payment = RecurringPayment.Create(userId, "Internet", 35, "RUB", 1, RecurrenceUnit.Month,
+            new DateOnly(2026, 8, 15), DateTime.UtcNow);
+        repository.Items.Add(payment);
+
+        var result = await new PaymentService(repository).RecordPaymentAsync(
+            userId, payment.Id, 35, new DateOnly(2026, 8, 14), null, CancellationToken.None);
+
+        Assert.Equal(PaymentRecordStatus.SaveConflict, result.Status);
+    }
+
     private sealed class InMemoryPaymentRepository : IPaymentRepository
     {
         public List<RecurringPayment> Items { get; } = [];
+        public HashSet<(Guid PaymentId, string PaidPeriod)> PersistedPeriods { get; } = [];
+        public bool ThrowConcurrencyOnSave { get; init; }
 
         public Task AddAsync(RecurringPayment payment, CancellationToken cancellationToken)
         {
@@ -42,7 +94,17 @@ public sealed class PaymentServiceTests
                 .Where(x => !paymentId.HasValue || x.RecurringPaymentId == paymentId.Value)
                 .ToList());
 
-        public Task SaveChangesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task<bool> HasTransactionForPeriodAsync(Guid userId, Guid paymentId, string paidPeriod, CancellationToken cancellationToken) => Task.FromResult(false);
+        public Task SaveChangesAsync(CancellationToken cancellationToken)
+        {
+            if (ThrowConcurrencyOnSave)
+                throw new PaymentConcurrencyException(new InvalidOperationException("Simulated stale update."));
+
+            foreach (var transaction in Items.SelectMany(x => x.Transactions))
+                PersistedPeriods.Add((transaction.RecurringPaymentId, transaction.PaidPeriod));
+            return Task.CompletedTask;
+        }
+
+        public Task<bool> HasTransactionForPeriodAsync(Guid userId, Guid paymentId, string paidPeriod, CancellationToken cancellationToken) =>
+            Task.FromResult(PersistedPeriods.Contains((paymentId, paidPeriod)));
     }
 }
