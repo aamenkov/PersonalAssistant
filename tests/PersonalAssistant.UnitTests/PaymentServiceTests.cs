@@ -91,6 +91,21 @@ public sealed class PaymentServiceTests
     }
 
     [Fact]
+    public async Task GetActiveAsync_OrdersPaymentsByNearestDueDate()
+    {
+        var repository = new InMemoryPaymentRepository();
+        var userId = Guid.NewGuid();
+        repository.Items.Add(RecurringPayment.Create(userId, "Позже", 100, "RUB", 1, RecurrenceUnit.Month,
+            new DateOnly(2026, 9, 20), DateTime.UtcNow));
+        repository.Items.Add(RecurringPayment.Create(userId, "Раньше", 100, "RUB", 1, RecurrenceUnit.Month,
+            new DateOnly(2026, 8, 20), DateTime.UtcNow));
+
+        var result = await new PaymentService(repository).GetActiveAsync(userId, null, null, CancellationToken.None);
+
+        Assert.Equal(["Раньше", "Позже"], result.Select(x => x.Name));
+    }
+
+    [Fact]
     public async Task ReminderService_ClaimsDueReminderOnlyOnce()
     {
         var payments = new InMemoryPaymentRepository();

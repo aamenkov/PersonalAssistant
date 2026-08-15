@@ -137,6 +137,7 @@ public sealed class PaymentService(IPaymentRepository payments)
         return entities
             .Where(x => x.NextPaymentDate.HasValue)
             .OrderBy(x => x.NextPaymentDate)
+            .ThenBy(x => x.Name)
             .Select(x => new PaymentListItem(x.Id, x.Name, x.Amount, x.Currency, x.NextPaymentDate!.Value, x.RecurrenceInterval, x.RecurrenceUnit, x.PaymentMethod, x.IsAutoDebit))
             .ToList();
     }
@@ -159,8 +160,8 @@ public sealed class PaymentService(IPaymentRepository payments)
                 x.RecurrenceUnit,
                 x.NextPaymentDate.Value < today,
                 x.NextPaymentDate.Value.DayNumber - today.DayNumber))
-            .OrderBy(x => x.IsOverdue ? 0 : 1)
-            .ThenBy(x => x.DueDate)
+            .OrderBy(x => x.DueDate)
+            .ThenBy(x => x.Name)
             .ToList();
 
         var result = ordered.Where(x => x.IsOverdue || x.DueDate <= today.AddDays(windowDays)).ToList();
