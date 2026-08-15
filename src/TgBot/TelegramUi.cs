@@ -121,8 +121,7 @@ internal static class TelegramUi
         {
             InlineKeyboardButton.WithCallbackData("✅ Оплатил", TelegramCallbackData.Payment("pay", paymentId)),
             InlineKeyboardButton.WithCallbackData("✏️ Изменить", TelegramCallbackData.Payment("edit", paymentId))
-        },
-        new[] { InlineKeyboardButton.WithCallbackData("⏸ Отключить платеж", TelegramCallbackData.Payment("disable", paymentId)) }
+        }
     });
 
     public static InlineKeyboardMarkup EditFieldsKeyboard(Guid paymentId) => new(new[]
