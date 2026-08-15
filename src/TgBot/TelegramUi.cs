@@ -191,6 +191,23 @@ internal static class TelegramUi
         return string.Join("\n\n", lines);
     }
 
+    public static string FormatStatistics(int year, int month, IReadOnlyList<MonthlyStatisticsCurrency> monthly,
+        IReadOnlyList<AnnualStatisticsCurrency> annual)
+    {
+        var monthlyText = FormatStatistics(year, month, monthly);
+        if (annual.Count == 0)
+            return monthlyText;
+
+        var annualTitle = $"📅 Прогноз на {year} год";
+        var annualLines = annual.Select(x =>
+            $"{annualTitle}\n\n" +
+            $"Запланировано за год: {TelegramPresentation.Money(x.PlannedAmount, x.Currency)}\n" +
+            $"✅ Уже оплачено: {TelegramPresentation.Money(x.PaidAmount, x.Currency)}\n" +
+            $"⏳ Осталось: {TelegramPresentation.Money(x.RemainingAmount, x.Currency)}\n" +
+            $"Платежей: оплачено {x.PaidCount} из {x.PlannedCount}");
+        return monthlyText + "\n\n" + string.Join("\n\n", annualLines);
+    }
+
     public static string? GetCommand(string text) => text.Trim() switch
     {
         "💳 Ближайшие платежи" => "/upcoming",
