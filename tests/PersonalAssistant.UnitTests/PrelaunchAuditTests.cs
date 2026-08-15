@@ -104,13 +104,21 @@ public sealed class PrelaunchAuditTests
         var service = new PaymentRecordConversationService(states, new PaymentService(paymentRepository));
 
         await service.BeginAsync(userId, payment.Id, new DateOnly(2026, 8, 14), CancellationToken.None);
-        await service.HandleInputAsync(userId, "Ожидаемая сумма", CancellationToken.None);
-        var commentPrompt = await service.HandleInputAsync(userId, "Сегодня", CancellationToken.None);
-        var confirmation = await service.HandleInputAsync(userId, "Без комментария", CancellationToken.None);
-        var result = await service.HandleInputAsync(userId, "Да", CancellationToken.None);
+        var confirmation = await service.HandleInputAsync(userId, "Ожидаемая сумма", CancellationToken.None);
+        Assert.Contains("Дата: 14.08.2026", confirmation);
+        Assert.Contains("без комментария", confirmation);
+
+        var datePrompt = await service.HandleInputAsync(userId, "Изменить дату", CancellationToken.None);
+        Assert.Contains("Выберите новую дату", datePrompt);
+        confirmation = await service.HandleInputAsync(userId, "Сегодня", CancellationToken.None);
+        Assert.Contains("Дата: 14.08.2026", confirmation);
+
+        var commentPrompt = await service.HandleInputAsync(userId, "Добавить комментарий", CancellationToken.None);
+        confirmation = await service.HandleInputAsync(userId, "Без комментария", CancellationToken.None);
+        var result = await service.HandleInputAsync(userId, "Сохранить", CancellationToken.None);
 
         Assert.Contains("Без комментария", commentPrompt);
-        Assert.Contains("Комментарий: нет", confirmation);
+        Assert.Contains("Комментарий: без комментария", confirmation);
         Assert.Contains("Оплата сохранена", result);
         Assert.Null(states.State);
         Assert.Single(payment.Transactions);

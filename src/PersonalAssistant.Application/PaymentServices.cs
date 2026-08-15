@@ -1020,7 +1020,7 @@ public sealed class PaymentRecordConversationService(
                     UserInputParser.TryParsePositiveAmount(input, out var amount);
                     draft.PaidAmount = amount;
                 }
-                draft.Step = PaymentRecordStep.Date;
+                draft.Step = PaymentRecordStep.Confirmation;
                 break;
             case PaymentRecordStep.Date:
                 if (DateShortcutCalculator.TryParse(input, draft.Today, out var paidShortcutDate))
@@ -1032,21 +1032,33 @@ public sealed class PaymentRecordConversationService(
                         return "Введите дату оплаты в формате ДД.ММ.ГГГГ или выберите дату кнопкой:";
                     draft.PaidDate = paidDate;
                 }
-                draft.Step = PaymentRecordStep.Comment;
+                draft.Step = PaymentRecordStep.Confirmation;
                 break;
             case PaymentRecordStep.Comment:
                 draft.Comment = input == "-" || input.Equals("без комментария", StringComparison.OrdinalIgnoreCase) ? null : input;
                 draft.Step = PaymentRecordStep.Confirmation;
                 break;
             case PaymentRecordStep.Confirmation:
+                if (input.Equals("изменить дату", StringComparison.OrdinalIgnoreCase))
+                {
+                    draft.Step = PaymentRecordStep.Date;
+                    break;
+                }
+                if (input.Equals("добавить комментарий", StringComparison.OrdinalIgnoreCase))
+                {
+                    draft.Step = PaymentRecordStep.Comment;
+                    break;
+                }
                 if (input.Equals("нет", StringComparison.OrdinalIgnoreCase) || input.Equals("no", StringComparison.OrdinalIgnoreCase))
                 {
                     states.Remove(state);
                     await states.SaveChangesAsync(cancellationToken);
                     return "Отметка оплаты отменена.";
                 }
-                if (!input.Equals("да", StringComparison.OrdinalIgnoreCase) && !input.Equals("yes", StringComparison.OrdinalIgnoreCase))
-                    return "Выберите «Да» для сохранения или «Нет» для отмены:";
+                if (!input.Equals("да", StringComparison.OrdinalIgnoreCase)
+                    && !input.Equals("yes", StringComparison.OrdinalIgnoreCase)
+                    && !input.Equals("сохранить", StringComparison.OrdinalIgnoreCase))
+                    return "Выберите «Сохранить» или измените дату/комментарий:";
 
                 var result = await payments.RecordPaymentAsync(userId, draft.PaymentId, draft.PaidAmount!.Value, draft.PaidDate!.Value, draft.Comment, cancellationToken);
                 if (result.Status == PaymentRecordStatus.PaymentUnavailable)
@@ -1067,9 +1079,9 @@ public sealed class PaymentRecordConversationService(
         await states.SaveChangesAsync(cancellationToken);
         return draft.Step switch
         {
-            PaymentRecordStep.Date => "Выберите дату оплаты кнопкой или введите ее в формате ДД.ММ.ГГГГ:",
+            PaymentRecordStep.Date => "Выберите новую дату оплаты кнопкой или введите ее в формате ДД.ММ.ГГГГ:",
             PaymentRecordStep.Comment => "Добавьте комментарий или нажмите «Без комментария»:",
-            PaymentRecordStep.Confirmation => $"Проверьте оплату:\nСумма: {draft.PaidAmount:0.##}\nДата: {draft.PaidDate:dd.MM.yyyy}\nКомментарий: {draft.Comment ?? "нет"}\n\nСохранить оплату?",
+            PaymentRecordStep.Confirmation => $"Проверьте оплату:\nСумма: {draft.PaidAmount:0.##}\nДата: {draft.PaidDate:dd.MM.yyyy}\nКомментарий: {draft.Comment ?? "без комментария"}\n\nСохранить оплату или изменить данные?",
             _ => "Введите фактическую сумму или нажмите «Ожидаемая сумма»:"
         };
     }
