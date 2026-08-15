@@ -7,7 +7,7 @@ PersonalAssistant — расширяемый Telegram-бот, первым мо�
 ## Технологии
 
 - C# и .NET 8;
-- ASP.NET Core Generic Host;
+- ASP.NET Core Web Host с Telegram polling и health endpoint;
 - Telegram Bot API;
 - Entity Framework Core и PostgreSQL;
 - Docker Compose;
