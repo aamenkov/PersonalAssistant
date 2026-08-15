@@ -111,8 +111,7 @@ internal static class TelegramUi
             new[]
             {
                 InlineKeyboardButton.WithCallbackData("✅ Оплатил", TelegramCallbackData.Payment("pay", payment.Id)),
-                InlineKeyboardButton.WithCallbackData("✏️ Изменить", TelegramCallbackData.Payment("edit", payment.Id)),
-                InlineKeyboardButton.WithCallbackData("⋯", TelegramCallbackData.Payment("more", payment.Id))
+                InlineKeyboardButton.WithCallbackData("✏️ Изменить", TelegramCallbackData.Payment("edit", payment.Id))
             }
         }));
 
@@ -121,9 +120,9 @@ internal static class TelegramUi
         new[]
         {
             InlineKeyboardButton.WithCallbackData("✅ Оплатил", TelegramCallbackData.Payment("pay", paymentId)),
-            InlineKeyboardButton.WithCallbackData("✏️ Изменить", TelegramCallbackData.Payment("edit", paymentId)),
-            InlineKeyboardButton.WithCallbackData("⋯", TelegramCallbackData.Payment("more", paymentId))
-        }
+            InlineKeyboardButton.WithCallbackData("✏️ Изменить", TelegramCallbackData.Payment("edit", paymentId))
+        },
+        new[] { InlineKeyboardButton.WithCallbackData("⏸ Отключить платеж", TelegramCallbackData.Payment("disable", paymentId)) }
     });
 
     public static InlineKeyboardMarkup EditFieldsKeyboard(Guid paymentId) => new(new[]
@@ -131,6 +130,7 @@ internal static class TelegramUi
         new[] { InlineKeyboardButton.WithCallbackData("💰 Сумма", TelegramCallbackData.EditField("amount", paymentId)), InlineKeyboardButton.WithCallbackData("📅 Расписание", TelegramCallbackData.EditField("schedule", paymentId)) },
         new[] { InlineKeyboardButton.WithCallbackData("💳 Способ", TelegramCallbackData.EditField("method", paymentId)), InlineKeyboardButton.WithCallbackData("🔁 Автосписание", TelegramCallbackData.EditField("autopay", paymentId)) },
         new[] { InlineKeyboardButton.WithCallbackData("✏️ Название", TelegramCallbackData.EditField("name", paymentId)), InlineKeyboardButton.WithCallbackData("📝 Комментарий", TelegramCallbackData.EditField("comment", paymentId)) },
+        new[] { InlineKeyboardButton.WithCallbackData("⏸ Отключить платеж", TelegramCallbackData.Payment("disable", paymentId)) },
         new[] { InlineKeyboardButton.WithCallbackData("◀️ Назад", TelegramCallbackData.Payment("back", paymentId)) }
     });
 
