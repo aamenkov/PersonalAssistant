@@ -274,6 +274,23 @@ internal static class TelegramUi
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Карта", "Банковский перевод" }, new KeyboardButton[] { "Наличные", "Другое" }, new KeyboardButton[] { "Оставить текущий" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("автосписание", StringComparison.OrdinalIgnoreCase))
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Да", "Нет" }, new KeyboardButton[] { "Оставить текущее" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        if (response.Contains("день месяца", StringComparison.OrdinalIgnoreCase))
+            return new ReplyKeyboardMarkup(new[]
+            {
+                new KeyboardButton[] { "1", "5", "10" },
+                new KeyboardButton[] { "15", "20", "25" },
+                new KeyboardButton[] { "Последний день" },
+                new KeyboardButton[] { "Отмена" }
+            }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        if (response.Contains("день недели", StringComparison.OrdinalIgnoreCase))
+            return new ReplyKeyboardMarkup(new[]
+            {
+                new KeyboardButton[] { "Понедельник", "Вторник" },
+                new KeyboardButton[] { "Среда", "Четверг" },
+                new KeyboardButton[] { "Пятница", "Суббота" },
+                new KeyboardButton[] { "Воскресенье" },
+                new KeyboardButton[] { "Отмена" }
+            }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("дату", StringComparison.OrdinalIgnoreCase) || response.Contains("Сегодня", StringComparison.OrdinalIgnoreCase))
         {
             var rows = new List<KeyboardButton[]>
