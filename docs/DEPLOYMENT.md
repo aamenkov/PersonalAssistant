@@ -73,11 +73,12 @@ docker compose logs -f tgbot
 Для первого smoke-теста:
 
 1. Проверьте в логах сообщения `Database migrations applied` и `PersonalAssistant polling started`.
-2. Выполните `/start` и выберите часовой пояс.
-3. Создайте тестовый платеж через `/add`.
-4. Проверьте `/payments`, `/upcoming`, `/edit` и `/pay`.
-5. Проверьте `/history` и `/stats`.
-6. Временно настройте время напоминания в `/settings` и проверьте уведомление с кнопкой «Оплатил».
+2. Проверьте health endpoint: `curl http://localhost:8080/health` должен вернуть JSON со статусом `ok`.
+3. Выполните `/start` и выберите часовой пояс.
+4. Создайте тестовый платеж через `/add`.
+5. Проверьте `/payments`, `/upcoming`, `/edit` и `/pay`.
+6. Проверьте `/history` и `/stats`.
+7. Временно настройте время напоминания в `/settings` и проверьте уведомление с кнопкой «Оплатил».
 
 После успешной проверки убедитесь, что `TELEGRAM_ALLOWED_USER_IDS` содержит только нужные Telegram User ID.
 
