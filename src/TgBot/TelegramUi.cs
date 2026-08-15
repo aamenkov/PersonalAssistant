@@ -121,8 +121,7 @@ internal static class TelegramUi
         {
             InlineKeyboardButton.WithCallbackData("✅ Оплатил", TelegramCallbackData.Payment("pay", paymentId)),
             InlineKeyboardButton.WithCallbackData("✏️ Изменить", TelegramCallbackData.Payment("edit", paymentId))
-        },
-        new[] { InlineKeyboardButton.WithCallbackData("⏸ Отключить платеж", TelegramCallbackData.Payment("disable", paymentId)) }
+        }
     });
 
     public static InlineKeyboardMarkup EditFieldsKeyboard(Guid paymentId) => new(new[]
@@ -253,6 +252,15 @@ internal static class TelegramUi
 
     private static ReplyKeyboardMarkup? AddStepKeyboard(string response)
     {
+        if (response.Contains("Изменить дату", StringComparison.OrdinalIgnoreCase)
+            || response.Contains("Добавить комментарий", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ReplyKeyboardMarkup(new[]
+            {
+                new KeyboardButton[] { "✅ Сохранить", "📅 Изменить дату" },
+                new KeyboardButton[] { "📝 Добавить комментарий", "Отмена" }
+            }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        }
         if (response.Contains("Сохранить", StringComparison.OrdinalIgnoreCase))
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Да", "Нет" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("Ожидаемая сумма", StringComparison.OrdinalIgnoreCase))

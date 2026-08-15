@@ -525,7 +525,8 @@ internal sealed class TelegramPollingService(
             }
 
             var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
-            if (!TryParseMonth(text, user.TimeZoneId, out var year, out var month))
+            var monthCommand = text.StartsWith("/", StringComparison.Ordinal) ? text : command;
+            if (!TryParseMonth(monthCommand, user.TimeZoneId, out var year, out var month))
             {
                 await client.SendMessage(update.Message.Chat.Id, "Укажите месяц в формате `/history ГГГГ-ММ`, например `/history 2026-08`.", cancellationToken: cancellationToken);
                 return;
@@ -547,7 +548,8 @@ internal sealed class TelegramPollingService(
                 return;
             }
 
-            if (!TryParseMonth(text, user.TimeZoneId, out var year, out var month))
+            var monthCommand = text.StartsWith("/", StringComparison.Ordinal) ? text : command;
+            if (!TryParseMonth(monthCommand, user.TimeZoneId, out var year, out var month))
             {
                 await client.SendMessage(update.Message.Chat.Id, "Укажите месяц в формате `/stats ГГГГ-ММ`, например `/stats 2026-08`.", cancellationToken: cancellationToken);
                 return;
