@@ -111,8 +111,7 @@ internal static class TelegramUi
             new[]
             {
                 InlineKeyboardButton.WithCallbackData("✅ Оплатил", TelegramCallbackData.Payment("pay", payment.Id)),
-                InlineKeyboardButton.WithCallbackData("✏️ Изменить", TelegramCallbackData.Payment("edit", payment.Id)),
-                InlineKeyboardButton.WithCallbackData("⋯", TelegramCallbackData.Payment("more", payment.Id))
+                InlineKeyboardButton.WithCallbackData("✏️ Изменить", TelegramCallbackData.Payment("edit", payment.Id))
             }
         }));
 
@@ -121,9 +120,9 @@ internal static class TelegramUi
         new[]
         {
             InlineKeyboardButton.WithCallbackData("✅ Оплатил", TelegramCallbackData.Payment("pay", paymentId)),
-            InlineKeyboardButton.WithCallbackData("✏️ Изменить", TelegramCallbackData.Payment("edit", paymentId)),
-            InlineKeyboardButton.WithCallbackData("⋯", TelegramCallbackData.Payment("more", paymentId))
-        }
+            InlineKeyboardButton.WithCallbackData("✏️ Изменить", TelegramCallbackData.Payment("edit", paymentId))
+        },
+        new[] { InlineKeyboardButton.WithCallbackData("⏸ Отключить платеж", TelegramCallbackData.Payment("disable", paymentId)) }
     });
 
     public static InlineKeyboardMarkup EditFieldsKeyboard(Guid paymentId) => new(new[]
@@ -131,6 +130,7 @@ internal static class TelegramUi
         new[] { InlineKeyboardButton.WithCallbackData("💰 Сумма", TelegramCallbackData.EditField("amount", paymentId)), InlineKeyboardButton.WithCallbackData("📅 Расписание", TelegramCallbackData.EditField("schedule", paymentId)) },
         new[] { InlineKeyboardButton.WithCallbackData("💳 Способ", TelegramCallbackData.EditField("method", paymentId)), InlineKeyboardButton.WithCallbackData("🔁 Автосписание", TelegramCallbackData.EditField("autopay", paymentId)) },
         new[] { InlineKeyboardButton.WithCallbackData("✏️ Название", TelegramCallbackData.EditField("name", paymentId)), InlineKeyboardButton.WithCallbackData("📝 Комментарий", TelegramCallbackData.EditField("comment", paymentId)) },
+        new[] { InlineKeyboardButton.WithCallbackData("⏸ Отключить платеж", TelegramCallbackData.Payment("disable", paymentId)) },
         new[] { InlineKeyboardButton.WithCallbackData("◀️ Назад", TelegramCallbackData.Payment("back", paymentId)) }
     });
 
@@ -189,6 +189,23 @@ internal static class TelegramUi
             $"⏳ Осталось: {TelegramPresentation.Money(x.RemainingAmount, x.Currency)}\n\n" +
             (x.UnpaidCount == 0 ? "Все платежи оплачены 🎉" : $"Не оплачено платежей: {x.UnpaidCount}"));
         return string.Join("\n\n", lines);
+    }
+
+    public static string FormatStatistics(int year, int month, IReadOnlyList<MonthlyStatisticsCurrency> monthly,
+        IReadOnlyList<AnnualStatisticsCurrency> annual)
+    {
+        var monthlyText = FormatStatistics(year, month, monthly);
+        if (annual.Count == 0)
+            return monthlyText;
+
+        var annualTitle = $"📅 Прогноз на {year} год";
+        var annualLines = annual.Select(x =>
+            $"{annualTitle}\n\n" +
+            $"Запланировано за год: {TelegramPresentation.Money(x.PlannedAmount, x.Currency)}\n" +
+            $"✅ Уже оплачено: {TelegramPresentation.Money(x.PaidAmount, x.Currency)}\n" +
+            $"⏳ Осталось: {TelegramPresentation.Money(x.RemainingAmount, x.Currency)}\n" +
+            $"Платежей: оплачено {x.PaidCount} из {x.PlannedCount}");
+        return monthlyText + "\n\n" + string.Join("\n\n", annualLines);
     }
 
     public static string? GetCommand(string text) => text.Trim() switch

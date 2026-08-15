@@ -92,6 +92,15 @@ public sealed record MonthlyStatisticsCurrency(
     int PaidCount,
     int UnpaidCount);
 
+public sealed record AnnualStatisticsCurrency(
+    string Currency,
+    decimal PlannedAmount,
+    decimal PaidAmount,
+    decimal RemainingAmount,
+    int PlannedCount,
+    int PaidCount,
+    int UnpaidCount);
+
 public enum PaymentRecordStatus
 {
     Recorded,
@@ -128,6 +137,7 @@ public sealed class PaymentService(IPaymentRepository payments)
         return entities
             .Where(x => x.NextPaymentDate.HasValue)
             .OrderBy(x => x.NextPaymentDate)
+            .ThenBy(x => x.Name)
             .Select(x => new PaymentListItem(x.Id, x.Name, x.Amount, x.Currency, x.NextPaymentDate!.Value, x.RecurrenceInterval, x.RecurrenceUnit, x.PaymentMethod, x.IsAutoDebit))
             .ToList();
     }
@@ -150,8 +160,8 @@ public sealed class PaymentService(IPaymentRepository payments)
                 x.RecurrenceUnit,
                 x.NextPaymentDate.Value < today,
                 x.NextPaymentDate.Value.DayNumber - today.DayNumber))
-            .OrderBy(x => x.IsOverdue ? 0 : 1)
-            .ThenBy(x => x.DueDate)
+            .OrderBy(x => x.DueDate)
+            .ThenBy(x => x.Name)
             .ToList();
 
         var result = ordered.Where(x => x.IsOverdue || x.DueDate <= today.AddDays(windowDays)).ToList();
@@ -299,6 +309,67 @@ public sealed class PaymentService(IPaymentRepository payments)
                 var plan = planned.GetValueOrDefault(currency);
                 var actual = paid.GetValueOrDefault(currency);
                 return new MonthlyStatisticsCurrency(currency, plan.Amount, actual.Amount,
+                    Math.Max(0, plan.Amount - actual.Amount), plan.Count, actual.Count, Math.Max(0, plan.Count - actual.Count));
+            })
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<AnnualStatisticsCurrency>> GetAnnualStatisticsAsync(Guid userId, int year, CancellationToken cancellationToken)
+    {
+        var start = new DateOnly(year, 1, 1);
+        var end = new DateOnly(year, 12, 31);
+        var activePayments = await payments.GetActiveAsync(userId, null, null, cancellationToken);
+        var transactions = await payments.GetTransactionsForOwnerAsync(userId, null, start, end, cancellationToken);
+        var planned = new Dictionary<string, (decimal Amount, int Count)>(StringComparer.OrdinalIgnoreCase);
+        var plannedOccurrences = new HashSet<(Guid PaymentId, DateOnly DueDate)>();
+
+        foreach (var payment in activePayments)
+        {
+            if (!payment.NextPaymentDate.HasValue)
+                continue;
+
+            var dueDate = payment.NextPaymentDate.Value;
+            while (dueDate < start)
+            {
+                if (payment.RecurrenceUnit == RecurrenceUnit.Once)
+                {
+                    dueDate = end.AddDays(1);
+                    break;
+                }
+                dueDate = PaymentDateCalculator.CalculateNext(dueDate, payment.RecurrenceInterval, payment.RecurrenceUnit);
+            }
+
+            while (dueDate <= end)
+            {
+                var current = planned.GetValueOrDefault(payment.Currency);
+                planned[payment.Currency] = (current.Amount + payment.Amount, current.Count + 1);
+                plannedOccurrences.Add((payment.Id, dueDate));
+                if (payment.RecurrenceUnit == RecurrenceUnit.Once)
+                    break;
+                dueDate = PaymentDateCalculator.CalculateNext(dueDate, payment.RecurrenceInterval, payment.RecurrenceUnit);
+            }
+        }
+
+        foreach (var transaction in transactions)
+        {
+            if (!DateOnly.TryParseExact(transaction.PaidPeriod, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dueDate)
+                || dueDate < start || dueDate > end || transaction.RecurringPayment is null
+                || !plannedOccurrences.Add((transaction.RecurringPaymentId, dueDate)))
+                continue;
+
+            var current = planned.GetValueOrDefault(transaction.Currency);
+            planned[transaction.Currency] = (current.Amount + transaction.ExpectedAmount, current.Count + 1);
+        }
+
+        var paid = transactions.GroupBy(x => x.Currency, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => (Amount: x.Sum(t => t.PaidAmount), Count: x.Count()), StringComparer.OrdinalIgnoreCase);
+        return planned.Keys.Union(paid.Keys, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x)
+            .Select(currency =>
+            {
+                var plan = planned.GetValueOrDefault(currency);
+                var actual = paid.GetValueOrDefault(currency);
+                return new AnnualStatisticsCurrency(currency, plan.Amount, actual.Amount,
                     Math.Max(0, plan.Amount - actual.Amount), plan.Count, actual.Count, Math.Max(0, plan.Count - actual.Count));
             })
             .ToList();

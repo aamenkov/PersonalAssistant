@@ -239,7 +239,8 @@ internal sealed class TelegramPollingService(
             if (parts[0] == "stats")
             {
                 var statistics = await payments.GetMonthlyStatisticsAsync(user.Id, selectedMonth.Year, selectedMonth.Month, cancellationToken);
-                response = TelegramUi.FormatStatistics(selectedMonth.Year, selectedMonth.Month, statistics);
+                var annual = await payments.GetAnnualStatisticsAsync(user.Id, selectedMonth.Year, cancellationToken);
+                response = TelegramUi.FormatStatistics(selectedMonth.Year, selectedMonth.Month, statistics, annual);
             }
             else
             {
@@ -512,7 +513,8 @@ internal sealed class TelegramPollingService(
             }
             var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
             var statistics = await payments.GetMonthlyStatisticsAsync(user.Id, year, month, cancellationToken);
-            await client.SendMessage(update.Message.Chat.Id, FormatStatistics(year, month, statistics),
+            var annual = await payments.GetAnnualStatisticsAsync(user.Id, year, cancellationToken);
+            await client.SendMessage(update.Message.Chat.Id, FormatStatistics(year, month, statistics, annual),
                 replyMarkup: TelegramUi.MonthNavigationKeyboard("stats:", year, month), cancellationToken: cancellationToken);
         }
         else if (command == "/settings")
@@ -600,5 +602,5 @@ internal sealed class TelegramPollingService(
 
     private static bool TryParseMonth(string command, string timeZoneId, out int year, out int month) => TelegramUi.TryParseMonth(command, timeZoneId, out year, out month);
 
-    private static string FormatStatistics(int year, int month, IReadOnlyList<MonthlyStatisticsCurrency> statistics) => TelegramUi.FormatStatistics(year, month, statistics);
+    private static string FormatStatistics(int year, int month, IReadOnlyList<MonthlyStatisticsCurrency> statistics, IReadOnlyList<AnnualStatisticsCurrency> annual) => TelegramUi.FormatStatistics(year, month, statistics, annual);
 }

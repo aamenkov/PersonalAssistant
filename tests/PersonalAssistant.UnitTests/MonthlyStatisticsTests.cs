@@ -51,6 +51,26 @@ public sealed class MonthlyStatisticsTests
         Assert.Empty(statistics);
     }
 
+    [Fact]
+    public async Task AnnualStatistics_ProjectsRemainingOccurrencesAndPaidAmount()
+    {
+        var userId = Guid.NewGuid();
+        var repository = new InMemoryPaymentRepository();
+        var payment = RecurringPayment.Create(userId, "Internet", 100, "RUB", 1, RecurrenceUnit.Month,
+            new DateOnly(2026, 1, 15), DateTime.UtcNow);
+        repository.Items.Add(payment);
+        payment.RecordPayment(90, new DateOnly(2026, 1, 15), "2026-01-15", null, DateTime.UtcNow);
+
+        var statistics = await new PaymentService(repository).GetAnnualStatisticsAsync(userId, 2026, CancellationToken.None);
+
+        var rubStats = Assert.Single(statistics);
+        Assert.Equal(1200, rubStats.PlannedAmount);
+        Assert.Equal(90, rubStats.PaidAmount);
+        Assert.Equal(1110, rubStats.RemainingAmount);
+        Assert.Equal(12, rubStats.PlannedCount);
+        Assert.Equal(1, rubStats.PaidCount);
+    }
+
     private sealed class InMemoryPaymentRepository : IPaymentRepository
     {
         public List<RecurringPayment> Items { get; } = [];
