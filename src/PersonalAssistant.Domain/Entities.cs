@@ -80,7 +80,9 @@ public sealed class RecurringPayment
         int recurrenceInterval,
         RecurrenceUnit recurrenceUnit,
         DateOnly nextPaymentDate,
-        DateTime createdAtUtc)
+        DateTime createdAtUtc,
+        int? scheduleDayOfMonth = null,
+        bool isLastDayOfMonth = false)
     {
         if (string.IsNullOrWhiteSpace(name))
             throw new ArgumentException("Payment name is required.", nameof(name));
@@ -90,6 +92,8 @@ public sealed class RecurringPayment
             throw new ArgumentException("Currency must be a three-letter code.", nameof(currency));
         if (recurrenceInterval <= 0)
             throw new ArgumentOutOfRangeException(nameof(recurrenceInterval));
+        if (scheduleDayOfMonth is < 1 or > 31)
+            throw new ArgumentOutOfRangeException(nameof(scheduleDayOfMonth));
 
         return new RecurringPayment
         {
@@ -100,6 +104,8 @@ public sealed class RecurringPayment
             RecurrenceInterval = recurrenceInterval,
             RecurrenceUnit = recurrenceUnit,
             NextPaymentDate = nextPaymentDate,
+            ScheduleDayOfMonth = scheduleDayOfMonth ?? nextPaymentDate.Day,
+            IsLastDayOfMonth = isLastDayOfMonth,
             CreatedAtUtc = createdAtUtc,
             UpdatedAtUtc = createdAtUtc
         };
@@ -115,6 +121,8 @@ public sealed class RecurringPayment
     public int RecurrenceInterval { get; private set; } = 1;
     public RecurrenceUnit RecurrenceUnit { get; private set; } = RecurrenceUnit.Month;
     public DateOnly? NextPaymentDate { get; private set; }
+    public int ScheduleDayOfMonth { get; private set; } = 1;
+    public bool IsLastDayOfMonth { get; private set; }
     public PaymentMethod PaymentMethod { get; private set; }
     public bool IsAutoDebit { get; private set; }
     public bool IsActive { get; private set; } = true;
@@ -133,7 +141,9 @@ public sealed class RecurringPayment
         PaymentMethod paymentMethod,
         bool isAutoDebit,
         string? description,
-        DateTime updatedAtUtc)
+        DateTime updatedAtUtc,
+        int? scheduleDayOfMonth = null,
+        bool? isLastDayOfMonth = null)
     {
         if (string.IsNullOrWhiteSpace(name))
             throw new ArgumentException("Payment name is required.", nameof(name));
@@ -143,6 +153,8 @@ public sealed class RecurringPayment
             throw new ArgumentException("Currency must be a three-letter code.", nameof(currency));
         if (recurrenceInterval <= 0)
             throw new ArgumentOutOfRangeException(nameof(recurrenceInterval));
+        if (scheduleDayOfMonth is < 1 or > 31)
+            throw new ArgumentOutOfRangeException(nameof(scheduleDayOfMonth));
 
         Name = name.Trim();
         Amount = amount;
@@ -150,6 +162,8 @@ public sealed class RecurringPayment
         RecurrenceInterval = recurrenceInterval;
         RecurrenceUnit = recurrenceUnit;
         NextPaymentDate = nextPaymentDate;
+        ScheduleDayOfMonth = scheduleDayOfMonth ?? nextPaymentDate.Day;
+        IsLastDayOfMonth = isLastDayOfMonth ?? IsLastDayOfMonth;
         PaymentMethod = paymentMethod;
         IsAutoDebit = isAutoDebit;
         Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
@@ -178,7 +192,8 @@ public sealed class RecurringPayment
             Deactivate(createdAtUtc);
         else if (NextPaymentDate.HasValue)
         {
-            NextPaymentDate = PaymentDateCalculator.CalculateNext(NextPaymentDate.Value, RecurrenceInterval, RecurrenceUnit);
+            NextPaymentDate = PaymentDateCalculator.CalculateNext(NextPaymentDate.Value, RecurrenceInterval, RecurrenceUnit,
+                ScheduleDayOfMonth, IsLastDayOfMonth);
             UpdatedAtUtc = createdAtUtc;
         }
 

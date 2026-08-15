@@ -32,6 +32,8 @@ public sealed class PersonalAssistantDbContext(DbContextOptions<PersonalAssistan
             entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
             entity.Property(x => x.Amount).HasPrecision(18, 2);
             entity.Property(x => x.Currency).HasMaxLength(3).IsRequired();
+            entity.Property(x => x.ScheduleDayOfMonth).IsRequired();
+            entity.Property(x => x.IsLastDayOfMonth).IsRequired();
             entity.HasIndex(x => new { x.UserId, x.IsActive });
             entity.HasOne(x => x.User).WithMany(x => x.Payments).HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });

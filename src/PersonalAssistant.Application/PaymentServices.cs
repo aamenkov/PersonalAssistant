@@ -79,7 +79,9 @@ public sealed record PaymentDetails(
     DateOnly NextPaymentDate,
     PaymentMethod PaymentMethod,
     bool IsAutoDebit,
-    string? Description);
+    string? Description,
+    int ScheduleDayOfMonth = 1,
+    bool IsLastDayOfMonth = false);
 
 public sealed record PaymentTransactionItem(Guid PaymentId, string PaymentName, decimal PaidAmount, string Currency, DateOnly PaidDate, string PaidPeriod, string? Comment);
 
@@ -124,9 +126,12 @@ public sealed class PaymentService(IPaymentRepository payments)
         int recurrenceInterval,
         RecurrenceUnit recurrenceUnit,
         DateOnly nextPaymentDate,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? scheduleDayOfMonth = null,
+        bool isLastDayOfMonth = false)
     {
-        var payment = RecurringPayment.Create(userId, name, amount, currency, recurrenceInterval, recurrenceUnit, nextPaymentDate, DateTime.UtcNow);
+        var payment = RecurringPayment.Create(userId, name, amount, currency, recurrenceInterval, recurrenceUnit, nextPaymentDate, DateTime.UtcNow,
+            scheduleDayOfMonth, isLastDayOfMonth);
         await payments.AddAsync(payment, cancellationToken);
         await payments.SaveChangesAsync(cancellationToken);
     }
@@ -181,7 +186,8 @@ public sealed class PaymentService(IPaymentRepository payments)
         return payment is null || !payment.IsActive || !payment.NextPaymentDate.HasValue
             ? null
             : new PaymentDetails(payment.Id, payment.Name, payment.Amount, payment.Currency, payment.RecurrenceInterval,
-                payment.RecurrenceUnit, payment.NextPaymentDate.Value, payment.PaymentMethod, payment.IsAutoDebit, payment.Description);
+                payment.RecurrenceUnit, payment.NextPaymentDate.Value, payment.PaymentMethod, payment.IsAutoDebit, payment.Description,
+                payment.ScheduleDayOfMonth, payment.IsLastDayOfMonth);
     }
 
     public async Task<bool> UpdateAsync(Guid userId, Guid paymentId, PaymentDetails details, CancellationToken cancellationToken)
@@ -191,7 +197,8 @@ public sealed class PaymentService(IPaymentRepository payments)
             return false;
 
         payment.UpdateDetails(details.Name, details.Amount, details.Currency, details.RecurrenceInterval, details.RecurrenceUnit,
-            details.NextPaymentDate, details.PaymentMethod, details.IsAutoDebit, details.Description, DateTime.UtcNow);
+            details.NextPaymentDate, details.PaymentMethod, details.IsAutoDebit, details.Description, DateTime.UtcNow,
+            details.ScheduleDayOfMonth, details.IsLastDayOfMonth);
         await payments.SaveChangesAsync(cancellationToken);
         return true;
     }
@@ -425,8 +432,36 @@ public sealed class PaymentConversationService(
                 if (!TryParseRecurrence(input, out var recurrenceUnit))
                     return "Выберите периодичность кнопкой ниже или введите её по-русски:";
                 draft.RecurrenceUnit = recurrenceUnit;
-                draft.Step = PaymentDraftStep.NextPaymentDate;
+                draft.Step = recurrenceUnit == RecurrenceUnit.Once ? PaymentDraftStep.NextPaymentDate : PaymentDraftStep.Schedule;
                 break;
+            case PaymentDraftStep.Schedule:
+                if (draft.RecurrenceUnit == RecurrenceUnit.Year)
+                {
+                    if (!TryParseUserDate(input, draft.Today, out var annualDate, out var error))
+                        return error;
+                    draft.NextPaymentDate = annualDate;
+                    draft.ScheduleDayOfMonth = annualDate.Day;
+                    draft.Step = PaymentDraftStep.Confirmation;
+                    break;
+                }
+
+                if (draft.RecurrenceUnit == RecurrenceUnit.Month && TryParseMonthDay(input, out var monthDay, out var lastDay))
+                {
+                    draft.ScheduleDayOfMonth = monthDay;
+                    draft.IsLastDayOfMonth = lastDay;
+                    draft.NextPaymentDate = NextMonthlyDate(draft.Today, monthDay, lastDay);
+                    draft.Step = PaymentDraftStep.Confirmation;
+                    break;
+                }
+
+                if (draft.RecurrenceUnit == RecurrenceUnit.Week && TryParseWeekday(input, out var weekday))
+                {
+                    draft.NextPaymentDate = NextWeekday(draft.Today, weekday);
+                    draft.Step = PaymentDraftStep.Confirmation;
+                    break;
+                }
+
+                return "Выберите вариант расписания кнопкой ниже:";
             case PaymentDraftStep.NextPaymentDate:
                 if (DateShortcutCalculator.TryParse(input, draft.Today, out var shortcutDate))
                 {
@@ -451,7 +486,8 @@ public sealed class PaymentConversationService(
                 if (!input.Equals("да", StringComparison.OrdinalIgnoreCase) && !input.Equals("yes", StringComparison.OrdinalIgnoreCase))
                     return "Введите `да` для сохранения или `нет` для отмены:";
 
-                await payments.CreateAsync(userId, draft.Name!, draft.Amount!.Value, draft.Currency!, 1, draft.RecurrenceUnit!.Value, draft.NextPaymentDate!.Value, cancellationToken);
+                await payments.CreateAsync(userId, draft.Name!, draft.Amount!.Value, draft.Currency!, 1, draft.RecurrenceUnit!.Value,
+                    draft.NextPaymentDate!.Value, cancellationToken, draft.ScheduleDayOfMonth, draft.IsLastDayOfMonth);
                 states.Remove(state);
                 await states.SaveChangesAsync(cancellationToken);
                 return "Платеж сохранен. Используйте /payments для просмотра.";
@@ -463,6 +499,9 @@ public sealed class PaymentConversationService(
         {
             PaymentDraftStep.Amount => "Введите сумму:",
             PaymentDraftStep.Recurrence => "Как часто нужно платить?",
+            PaymentDraftStep.Schedule when draft.RecurrenceUnit == RecurrenceUnit.Month => "📅 В какой день месяца платить?",
+            PaymentDraftStep.Schedule when draft.RecurrenceUnit == RecurrenceUnit.Week => "📅 В какой день недели платить?",
+            PaymentDraftStep.Schedule when draft.RecurrenceUnit == RecurrenceUnit.Year => "📅 Введите дату ежегодного платежа, например 15.09.2026:",
             PaymentDraftStep.NextPaymentDate => "📅 Когда следующий платеж? Выберите кнопку или введите дату, например 26.09.2026:",
             PaymentDraftStep.Confirmation => $"Проверьте платеж:\n\n{draft.Name}\n{draft.Amount:0.##} {draft.Currency}\n{PaymentDisplayNames.Recurrence(1, draft.RecurrenceUnit!.Value)}\nСледующий платеж: {draft.NextPaymentDate:dd.MM.yyyy}\n\nСохранить платеж?",
             _ => "Введите название платежа:"
@@ -482,6 +521,64 @@ public sealed class PaymentConversationService(
         return unit >= RecurrenceUnit.Once;
     }
 
+    private static bool TryParseUserDate(string input, DateOnly today, out DateOnly date, out string error)
+    {
+        if (!DateOnly.TryParseExact(input, new[] { "dd.MM.yyyy", "yyyy-MM-dd" }, CultureInfo.InvariantCulture, DateTimeStyles.None, out date))
+        {
+            error = "Не получилось распознать дату. Введите, например: 15.09.2026";
+            return false;
+        }
+        if (date < today)
+        {
+            error = $"Дата не может быть в прошлом. Укажите дату начиная с {today:dd.MM.yyyy}:";
+            return false;
+        }
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryParseMonthDay(string input, out int day, out bool lastDay)
+    {
+        lastDay = input.Trim().Equals("последний день", StringComparison.OrdinalIgnoreCase)
+            || input.Trim().Equals("последний день месяца", StringComparison.OrdinalIgnoreCase);
+        if (lastDay)
+        {
+            day = 31;
+            return true;
+        }
+        return int.TryParse(input.Trim(), out day) && day is >= 1 and <= 31;
+    }
+
+    private static bool TryParseWeekday(string input, out DayOfWeek weekday)
+    {
+        weekday = input.Trim().ToLowerInvariant() switch
+        {
+            "понедельник" => DayOfWeek.Monday,
+            "вторник" => DayOfWeek.Tuesday,
+            "среда" => DayOfWeek.Wednesday,
+            "четверг" => DayOfWeek.Thursday,
+            "пятница" => DayOfWeek.Friday,
+            "суббота" => DayOfWeek.Saturday,
+            "воскресенье" => DayOfWeek.Sunday,
+            _ => (DayOfWeek)(-1)
+        };
+        return weekday >= DayOfWeek.Sunday && weekday <= DayOfWeek.Saturday;
+    }
+
+    private static DateOnly NextMonthlyDate(DateOnly today, int day, bool lastDay)
+    {
+        var candidate = new DateOnly(today.Year, today.Month, lastDay ? DateTime.DaysInMonth(today.Year, today.Month) : Math.Min(day, DateTime.DaysInMonth(today.Year, today.Month)));
+        return candidate < today
+            ? new DateOnly(today.AddMonths(1).Year, today.AddMonths(1).Month, lastDay ? DateTime.DaysInMonth(today.AddMonths(1).Year, today.AddMonths(1).Month) : Math.Min(day, DateTime.DaysInMonth(today.AddMonths(1).Year, today.AddMonths(1).Month)))
+            : candidate;
+    }
+
+    private static DateOnly NextWeekday(DateOnly today, DayOfWeek weekday)
+    {
+        var days = ((int)weekday - (int)today.DayOfWeek + 7) % 7;
+        return today.AddDays(days);
+    }
+
     private sealed class PaymentDraftState
     {
         public PaymentDraftStep Step { get; set; }
@@ -490,6 +587,8 @@ public sealed class PaymentConversationService(
         public string? Currency { get; set; }
         public RecurrenceUnit? RecurrenceUnit { get; set; }
         public DateOnly? NextPaymentDate { get; set; }
+        public int ScheduleDayOfMonth { get; set; } = 1;
+        public bool IsLastDayOfMonth { get; set; }
         public DateOnly Today { get; set; }
     }
 
@@ -498,8 +597,9 @@ public sealed class PaymentConversationService(
         Name = 0,
         Amount = 1,
         Recurrence = 2,
-        NextPaymentDate = 3,
-        Confirmation = 4
+        Schedule = 3,
+        NextPaymentDate = 4,
+        Confirmation = 5
     }
 }
 
@@ -716,7 +816,8 @@ public sealed class PaymentEditConversationService(
                     return "Выберите «Да» для сохранения или «Нет» для отмены:";
 
                 var updated = new PaymentDetails(draft.PaymentId, draft.Name!, draft.Amount!.Value, draft.Currency!, draft.RecurrenceInterval,
-                    draft.RecurrenceUnit!.Value, draft.NextPaymentDate!.Value, draft.PaymentMethod!.Value, draft.IsAutoDebit!.Value, draft.Description);
+                    draft.RecurrenceUnit!.Value, draft.NextPaymentDate!.Value, draft.PaymentMethod!.Value, draft.IsAutoDebit!.Value, draft.Description,
+                    draft.ScheduleDayOfMonth, draft.IsLastDayOfMonth);
                 if (!await payments.UpdateAsync(userId, draft.PaymentId, updated, cancellationToken))
                     return "Платеж не найден или уже отключен.";
                 states.Remove(state);
@@ -755,7 +856,8 @@ public sealed class PaymentEditConversationService(
     private async Task<string> SaveFieldAsync(Guid userId, ConversationState state, PaymentEditDraft draft, CancellationToken cancellationToken)
     {
         var updated = new PaymentDetails(draft.PaymentId, draft.Name!, draft.Amount!.Value, draft.Currency!, draft.RecurrenceInterval,
-            draft.RecurrenceUnit!.Value, draft.NextPaymentDate!.Value, draft.PaymentMethod!.Value, draft.IsAutoDebit!.Value, draft.Description);
+            draft.RecurrenceUnit!.Value, draft.NextPaymentDate!.Value, draft.PaymentMethod!.Value, draft.IsAutoDebit!.Value, draft.Description,
+            draft.ScheduleDayOfMonth, draft.IsLastDayOfMonth);
         if (!await payments.UpdateAsync(userId, draft.PaymentId, updated, cancellationToken))
             return "Платеж не найден или уже отключен.";
         states.Remove(state);
@@ -811,6 +913,8 @@ public sealed class PaymentEditConversationService(
         public int RecurrenceInterval { get; set; }
         public RecurrenceUnit? RecurrenceUnit { get; set; }
         public DateOnly? NextPaymentDate { get; set; }
+        public int ScheduleDayOfMonth { get; set; } = 1;
+        public bool IsLastDayOfMonth { get; set; }
         public PaymentMethod? PaymentMethod { get; set; }
         public bool? IsAutoDebit { get; set; }
         public string? Description { get; set; }
@@ -826,6 +930,8 @@ public sealed class PaymentEditConversationService(
             RecurrenceInterval = payment.RecurrenceInterval,
             RecurrenceUnit = payment.RecurrenceUnit,
             NextPaymentDate = payment.NextPaymentDate,
+            ScheduleDayOfMonth = payment.ScheduleDayOfMonth,
+            IsLastDayOfMonth = payment.IsLastDayOfMonth,
             PaymentMethod = payment.PaymentMethod,
             IsAutoDebit = payment.IsAutoDebit,
             Description = payment.Description,
