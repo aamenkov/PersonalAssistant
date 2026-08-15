@@ -18,12 +18,15 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
+      ASPNETCORE_URLS: http://+:8080
       Telegram__BotToken: ${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN}
       Telegram__AllowedUserIds: ${TELEGRAM_ALLOWED_USER_IDS:-}
       ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=personalassistant;Username=personalassistant;Password=${POSTGRES_PASSWORD:-change-me-local-only}
     depends_on:
       postgres:
         condition: service_healthy
+    ports:
+      - "8080:8080"
 
 volumes:
   postgres-data:

@@ -11,6 +11,7 @@ public sealed class PersonalAssistantDbContext(DbContextOptions<PersonalAssistan
     public DbSet<RecurringPayment> RecurringPayments => Set<RecurringPayment>();
     public DbSet<PaymentTransaction> PaymentTransactions => Set<PaymentTransaction>();
     public DbSet<Reminder> Reminders => Set<Reminder>();
+    public DbSet<ProcessedTelegramUpdate> ProcessedTelegramUpdates => Set<ProcessedTelegramUpdate>();
     public DbSet<ConversationState> ConversationStates => Set<ConversationState>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -54,6 +55,13 @@ public sealed class PersonalAssistantDbContext(DbContextOptions<PersonalAssistan
             entity.HasKey(x => x.Id);
             entity.HasIndex(x => new { x.RecurringPaymentId, x.DueDate, x.LocalDate, x.Kind }).IsUnique();
             entity.HasOne(x => x.RecurringPayment).WithMany(x => x.Reminders).HasForeignKey(x => x.RecurringPaymentId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ProcessedTelegramUpdate>(entity =>
+        {
+            entity.HasKey(x => x.UpdateId);
+            entity.Property(x => x.UpdateId).ValueGeneratedNever();
+            entity.Property(x => x.ClaimedAtUtc).IsRequired();
         });
 
         modelBuilder.Entity<ConversationState>(entity =>

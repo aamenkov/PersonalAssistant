@@ -1,5 +1,7 @@
 using System.Globalization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
@@ -10,7 +12,8 @@ using PersonalAssistant.Application;
 using PersonalAssistant.Infrastructure;
 using PersonalAssistant.Bot;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
+builder.Logging.AddJsonConsole();
 var botToken = builder.Configuration["Telegram:BotToken"];
 if (string.IsNullOrWhiteSpace(botToken))
     throw new InvalidOperationException("Telegram:BotToken is not configured.");
@@ -22,6 +25,7 @@ builder.Services.AddScoped<UserTimeZoneService>();
 builder.Services.AddScoped<UserSettingsService>();
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddScoped<IReminderRepository, ReminderRepository>();
+builder.Services.AddScoped<ITelegramUpdateStore, TelegramUpdateStore>();
 builder.Services.AddScoped<ReminderService>();
 builder.Services.AddScoped<IConversationStateRepository, ConversationStateRepository>();
 builder.Services.AddScoped<PaymentService>();
@@ -35,6 +39,19 @@ builder.Services.AddHostedService<TelegramPollingService>();
 builder.Services.AddHostedService<ReminderBackgroundService>();
 
 var app = builder.Build();
+app.MapGet("/health", async (PersonalAssistantDbContext db, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        return await db.Database.CanConnectAsync(cancellationToken)
+            ? Results.Ok(new { status = "ok" })
+            : Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+    }
+    catch
+    {
+        return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+    }
+});
 await ApplyMigrationsAsync(app);
 await app.RunAsync();
 
@@ -42,9 +59,20 @@ static async Task ApplyMigrationsAsync(IHost app)
 {
     using var scope = app.Services.CreateScope();
     var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("DatabaseMigration");
+    var db = scope.ServiceProvider.GetRequiredService<PersonalAssistantDbContext>();
     logger.LogInformation("Applying database migrations");
-    await scope.ServiceProvider.GetRequiredService<PersonalAssistantDbContext>().Database.MigrateAsync();
-    logger.LogInformation("Database migrations applied");
+    await db.Database.OpenConnectionAsync();
+    try
+    {
+        await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_lock(hashtext('PersonalAssistant:migrations'))");
+        await db.Database.MigrateAsync();
+        logger.LogInformation("Database migrations applied");
+    }
+    finally
+    {
+        await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_unlock(hashtext('PersonalAssistant:migrations'))");
+        await db.Database.CloseConnectionAsync();
+    }
 }
 
 internal sealed class TelegramPollingService(
@@ -79,13 +107,26 @@ internal sealed class TelegramPollingService(
 
         await updateGate.RunAsync(telegramUserId.Value, async () =>
         {
+            using var updateScope = scopeFactory.CreateScope();
+            var updateStore = updateScope.ServiceProvider.GetRequiredService<ITelegramUpdateStore>();
+            if (!await updateStore.TryBeginAsync(update.Id, DateTime.UtcNow, cancellationToken))
+            {
+                logger.LogInformation("Skipped already processed Telegram update {UpdateId}", update.Id);
+                return;
+            }
+
             try
             {
                 await HandleUpdateCoreAsync(client, update, cancellationToken);
+                await updateStore.CompleteAsync(update.Id, DateTime.UtcNow, cancellationToken);
             }
-            catch (RequestException exception)
+            catch (Exception exception)
             {
-                logger.LogWarning("Telegram API temporarily unavailable while responding to update {UpdateId}: {Message}", update.Id, exception.Message);
+                await updateStore.AbandonAsync(update.Id, cancellationToken);
+                if (exception is RequestException)
+                    logger.LogWarning("Telegram API temporarily unavailable while responding to update {UpdateId}: {Message}", update.Id, exception.Message);
+                else
+                    logger.LogError(exception, "Telegram update processing failed for update {UpdateId}", update.Id);
             }
         }, cancellationToken);
     }
