@@ -1,5 +1,6 @@
 using System.Globalization;
 using PersonalAssistant.Application;
+using PersonalAssistant.Domain;
 using Telegram.Bot.Types.ReplyMarkups;
 
 namespace PersonalAssistant.Bot;
@@ -10,7 +11,8 @@ internal static class TelegramUi
     {
         new[] { InlineKeyboardButton.WithCallbackData("UTC (UTC+0)", TelegramCallbackData.TimeZone("UTC")), InlineKeyboardButton.WithCallbackData("Москва (UTC+3)", TelegramCallbackData.TimeZone("Europe/Moscow")) },
         new[] { InlineKeyboardButton.WithCallbackData("Берлин (UTC+1)", TelegramCallbackData.TimeZone("Europe/Berlin")), InlineKeyboardButton.WithCallbackData("Алматы (UTC+5)", TelegramCallbackData.TimeZone("Asia/Almaty")) },
-        new[] { InlineKeyboardButton.WithCallbackData("Токио (UTC+9)", TelegramCallbackData.TimeZone("Asia/Tokyo")), InlineKeyboardButton.WithCallbackData("Нью-Йорк (UTC−5)", TelegramCallbackData.TimeZone("America/New_York")) }
+        new[] { InlineKeyboardButton.WithCallbackData("Токио (UTC+9)", TelegramCallbackData.TimeZone("Asia/Tokyo")), InlineKeyboardButton.WithCallbackData("Нью-Йорк (UTC−5)", TelegramCallbackData.TimeZone("America/New_York")) },
+        new[] { InlineKeyboardButton.WithCallbackData("🕒 Указать текущее время", TelegramCallbackData.TimeZone("custom")) }
     });
 
     public static InlineKeyboardMarkup SettingsKeyboard(string currency, string timeZoneId = "UTC", int reminderDays = 3, TimeOnly? reminderTime = null) => new(new[]
@@ -269,12 +271,16 @@ internal static class TelegramUi
 
     public static DateOnly LocalDate(string timeZoneId)
     {
-        var timeZone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+        var timeZone = TimeZoneResolver.Resolve(timeZoneId);
         return DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, timeZone));
     }
 
     private static ReplyKeyboardMarkup? AddStepKeyboard(string response)
     {
+        if (response.Contains("Сохранить часовой пояс", StringComparison.OrdinalIgnoreCase))
+            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Да", "Нет" }, new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        if (response.Contains("Введите текущее местное время", StringComparison.OrdinalIgnoreCase))
+            return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("Изменить дату", StringComparison.OrdinalIgnoreCase)
             || response.Contains("Добавить комментарий", StringComparison.OrdinalIgnoreCase))
         {

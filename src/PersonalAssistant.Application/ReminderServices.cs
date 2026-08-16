@@ -49,7 +49,7 @@ public sealed class ReminderService(
             TimeZoneInfo timeZone;
             try
             {
-                timeZone = TimeZoneInfo.FindSystemTimeZoneById(candidate.TimeZoneId);
+                timeZone = TimeZoneResolver.Resolve(candidate.TimeZoneId);
             }
             catch (Exception exception) when (exception is TimeZoneNotFoundException or InvalidTimeZoneException)
             {

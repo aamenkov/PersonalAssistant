@@ -67,7 +67,7 @@ internal static class TelegramPresentation
     {
         try
         {
-            var zone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+            var zone = TimeZoneResolver.Resolve(timeZoneId);
             var offset = zone.GetUtcOffset(DateTime.UtcNow);
             var hours = offset.TotalHours >= 0 ? $"+{offset.TotalHours:0}" : $"{offset.TotalHours:0}";
             var name = timeZoneId switch
@@ -78,6 +78,7 @@ internal static class TelegramPresentation
                 "Asia/Tokyo" => "Токио",
                 "America/New_York" => "Нью-Йорк",
                 "UTC" => "UTC",
+                _ when TimeZoneResolver.TryParseFixedOffset(timeZoneId, out _) => "Ваш регион",
                 _ => timeZoneId
             };
             return $"{name} · UTC{hours}";

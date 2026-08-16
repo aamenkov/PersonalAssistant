@@ -13,7 +13,7 @@ public sealed class UserTimeZoneService(IUserRepository users)
 {
     public async Task SetAsync(long telegramUserId, string timeZoneId, CancellationToken cancellationToken)
     {
-        TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+        TimeZoneResolver.Resolve(timeZoneId);
         var user = await users.FindByTelegramUserIdAsync(telegramUserId, cancellationToken)
             ?? throw new InvalidOperationException("User is not registered.");
 

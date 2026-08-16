@@ -26,7 +26,7 @@ public static class ReminderSnoozeCalculator
 {
     public static DateTime CalculateUntil(ReminderSnoozeOption option, DateTime utcNow, string timeZoneId, TimeOnly reminderTimeLocal)
     {
-        var timeZone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+        var timeZone = TimeZoneResolver.Resolve(timeZoneId);
         var localNow = TimeZoneInfo.ConvertTimeFromUtc(utcNow, timeZone);
         var localUntil = option switch
         {
