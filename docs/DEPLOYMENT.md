@@ -128,13 +128,9 @@ docker compose exec postgres pg_isready -U personalassistant -d personalassistan
 
 ## Резервное копирование
 
-Данные хранятся в Docker volume `postgres-data`. Перед опасными операциями сделайте дамп базы:
+Данные хранятся в Docker volume `postgres-data`, но копии создаются через `pg_dump`. Команды создания и восстановления, рекомендуемая ротация и правила хранения описаны в [BACKUP.md](BACKUP.md).
 
-```bash
-docker compose exec -T postgres pg_dump -U personalassistant -d personalassistant > personalassistant-backup.sql
-```
-
-Файл дампа содержит персональные данные и не должен попадать в Git.
+Перед публикацией MVP 2 проверьте, что задан надежный `POSTGRES_PASSWORD`, `TELEGRAM_ALLOWED_USER_IDS` ограничивает доступ, `/health` отвечает только через `localhost:8080`, а свежий backup сохранен за пределами VPS.
 
 ## Локальный запуск
 

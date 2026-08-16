@@ -41,6 +41,7 @@ Solution: `PersonalAssistant.sln`.
 - `src/PersonalAssistant.Domain/Entities.cs` — сущности пользователя, платежа, транзакции, напоминания и состояния диалогов.
 - `src/PersonalAssistant.Domain/Enums.cs` — доменные перечисления.
 - `src/PersonalAssistant.Domain/PaymentDateCalculator.cs` — расчет следующей даты платежа.
+- `src/PersonalAssistant.Domain/TimeZoneResolver.cs` — разрешение IANA-зон и фиксированных UTC-смещений.
 
 ### Application
 
@@ -48,6 +49,8 @@ Solution: `PersonalAssistant.sln`.
 - `PaymentService.GetMonthlyStatisticsAsync` в `PaymentServices.cs` — месячная статистика.
 - `src/PersonalAssistant.Application/ReminderServices.cs` — расчет напоминаний и защита от повторной заявки.
 - `src/PersonalAssistant.Application/UserRegistrationService.cs` — регистрация и настройки пользователя.
+- `src/PersonalAssistant.Application/TimeZoneConversationService.cs` — определение российского UTC-смещения по введенному местному времени.
+- `src/PersonalAssistant.Application/AdminService.cs` — административные операции над данными текущего пользователя.
 - `src/PersonalAssistant.Application/DateShortcutCalculator.cs` — быстрые варианты дат.
 
 ### Infrastructure
@@ -144,6 +147,7 @@ dotnet build PersonalAssistant.sln
 dotnet test PersonalAssistant.sln
 $env:TELEGRAM_BOT_TOKEN='test-token'
 docker compose config
+dotnet list PersonalAssistant.sln package --vulnerable --include-transitive --source https://api.nuget.org/v3/index.json
 dotnet run --project src/TgBot
 ```
 

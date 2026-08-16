@@ -400,7 +400,7 @@ internal sealed class TelegramPollingService(
             var response = await editor.BeginFieldAsync(user.Id, paymentId, parts[1], LocalDate(user.TimeZoneId), cancellationToken);
             await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
             if (update.CallbackQuery.Message is { } message)
-                    await client.SendMessage(message.Chat.Id, response, replyMarkup: TelegramUi.ConversationKeyboard(response, adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
+                await client.SendMessage(message.Chat.Id, response, replyMarkup: TelegramUi.ConversationKeyboard(response, adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
             return;
         }
 
@@ -742,15 +742,15 @@ internal sealed class TelegramPollingService(
         {
             using var scope = scopeFactory.CreateScope();
             var users = scope.ServiceProvider.GetRequiredService<IUserRepository>();
-            if (await users.FindByTelegramUserIdAsync(from.Id, cancellationToken) is null)
+            var user = await users.FindByTelegramUserIdAsync(from.Id, cancellationToken);
+            if (user is null)
             {
                 await client.SendMessage(update.Message.Chat.Id, "Сначала выполните /start.", cancellationToken: cancellationToken);
                 return;
             }
 
-            var user = await users.FindByTelegramUserIdAsync(from.Id, cancellationToken);
             await client.SendMessage(update.Message.Chat.Id,
-                $"⚙️ Настройки\n\nЧасовой пояс: {TelegramPresentation.TimeZone(user!.TimeZoneId)}\nВалюта: {user.DefaultCurrency}\nНапоминание: за {user.ReminderDaysBefore} дн.\nВремя: {user.ReminderTimeLocal:HH\\:mm}\n\nВыберите параметр для изменения:",
+                $"⚙️ Настройки\n\nЧасовой пояс: {TelegramPresentation.TimeZone(user.TimeZoneId)}\nВалюта: {user.DefaultCurrency}\nПредварительное напоминание: за {TelegramPresentation.DaysCount(user.ReminderDaysBefore)}\nВремя: {user.ReminderTimeLocal:HH\\:mm}\n\nВыберите параметр для изменения:",
                 replyMarkup: SettingsKeyboard(user.DefaultCurrency, user.TimeZoneId, user.ReminderDaysBefore, user.ReminderTimeLocal), cancellationToken: cancellationToken);
         }
         else if (command == "/help")
@@ -806,15 +806,9 @@ internal sealed class TelegramPollingService(
 
     private static DateOnly LocalDate(string timeZoneId) => TelegramUi.LocalDate(timeZoneId);
 
-    private static string FormatPayments(IReadOnlyList<PaymentListItem> payments, bool upcoming) => TelegramUi.FormatPayments(payments, upcoming);
-
     private static InlineKeyboardMarkup PaymentActionKeyboard(IReadOnlyList<PaymentListItem> payments, string action) => TelegramUi.PaymentActionKeyboard(payments, action);
 
-    private static string FormatHistory(IReadOnlyList<PaymentTransactionItem> history) => TelegramUi.FormatHistory(history);
-
     private static string? GetCommand(string text) => TelegramUi.GetCommand(text);
-
-    private static string? GetSlashCommand(string text) => TelegramUi.GetCommand(text);
 
     private static bool TryParseMonth(string command, string timeZoneId, out int year, out int month) => TelegramUi.TryParseMonth(command, timeZoneId, out year, out month);
 
