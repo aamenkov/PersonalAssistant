@@ -59,6 +59,23 @@ public static class UserInputParser
     }
 }
 
+internal static class MonthlyScheduleDates
+{
+    public static DateOnly Next(DateOnly today, int day, bool lastDay)
+    {
+        var currentMonth = new DateOnly(today.Year, today.Month, lastDay
+            ? DateTime.DaysInMonth(today.Year, today.Month)
+            : Math.Min(day, DateTime.DaysInMonth(today.Year, today.Month)));
+        if (currentMonth >= today)
+            return currentMonth;
+
+        var nextMonth = today.AddMonths(1);
+        return new DateOnly(nextMonth.Year, nextMonth.Month, lastDay
+            ? DateTime.DaysInMonth(nextMonth.Year, nextMonth.Month)
+            : Math.Min(day, DateTime.DaysInMonth(nextMonth.Year, nextMonth.Month)));
+    }
+}
+
 public sealed record PaymentListItem(Guid Id, string Name, decimal Amount, string Currency, DateOnly DueDate, int RecurrenceInterval, RecurrenceUnit RecurrenceUnit, PaymentMethod PaymentMethod, bool IsAutoDebit);
 
 public sealed record UpcomingPaymentItem(
@@ -455,8 +472,14 @@ public sealed class PaymentConversationService(
                 {
                     draft.ScheduleDayOfMonth = monthDay;
                     draft.IsLastDayOfMonth = lastDay;
-                    draft.NextPaymentDate = NextMonthlyDate(draft.Today, monthDay, lastDay);
+                    draft.NextPaymentDate = MonthlyScheduleDates.Next(draft.Today, monthDay, lastDay);
                     draft.Step = PaymentDraftStep.Confirmation;
+                    break;
+                }
+
+                if (draft.RecurrenceUnit == RecurrenceUnit.Month && IsCustomDate(input))
+                {
+                    draft.Step = PaymentDraftStep.MonthlyDate;
                     break;
                 }
 
@@ -468,6 +491,14 @@ public sealed class PaymentConversationService(
                 }
 
                 return "Выберите вариант расписания кнопкой ниже:";
+            case PaymentDraftStep.MonthlyDate:
+                if (!TryParseUserDate(input, draft.Today, out var monthlyDate, out var monthlyError))
+                    return monthlyError;
+                draft.ScheduleDayOfMonth = monthlyDate.Day;
+                draft.IsLastDayOfMonth = false;
+                draft.NextPaymentDate = monthlyDate;
+                draft.Step = PaymentDraftStep.Confirmation;
+                break;
             case PaymentDraftStep.NextPaymentDate:
                 if (DateShortcutCalculator.TryParse(input, draft.Today, out var shortcutDate))
                 {
@@ -505,14 +536,18 @@ public sealed class PaymentConversationService(
         {
             PaymentDraftStep.Amount => "Введите сумму:",
             PaymentDraftStep.Recurrence => "Как часто нужно платить?",
-            PaymentDraftStep.Schedule when draft.RecurrenceUnit == RecurrenceUnit.Month => "📅 В какой день месяца платить?",
+            PaymentDraftStep.Schedule when draft.RecurrenceUnit == RecurrenceUnit.Month => "📅 Выберите день месяца:",
             PaymentDraftStep.Schedule when draft.RecurrenceUnit == RecurrenceUnit.Week => "📅 В какой день недели платить?",
-            PaymentDraftStep.Schedule when draft.RecurrenceUnit == RecurrenceUnit.Year => "📅 Введите дату ежегодного платежа, например 15.09.2026:",
+            PaymentDraftStep.Schedule when draft.RecurrenceUnit == RecurrenceUnit.Year => "📅 Укажите дату платежа в формате ДД.ММ.ГГГГ:",
+            PaymentDraftStep.MonthlyDate => "📅 Укажите дату платежа в формате ДД.ММ.ГГГГ:",
             PaymentDraftStep.NextPaymentDate => "📅 Когда следующий платеж? Выберите кнопку или введите дату, например 26.09.2026:",
-            PaymentDraftStep.Confirmation => $"Проверьте платеж:\n\n{draft.Name}\n{draft.Amount:0.##} {draft.Currency}\n{PaymentDisplayNames.Recurrence(1, draft.RecurrenceUnit!.Value)}\nСледующий платеж: {draft.NextPaymentDate:dd.MM.yyyy}\n\nСохранить платеж?",
+            PaymentDraftStep.Confirmation => FormatPaymentConfirmation(draft),
             _ => "Введите название платежа:"
         };
     }
+
+    private static string FormatPaymentConfirmation(PaymentDraftState draft) =>
+        $"✅ Проверьте платеж\n\n💳 {draft.Name}\n💰 {draft.Amount:0.##} {draft.Currency}\n🔁 {PaymentDisplayNames.Recurrence(1, draft.RecurrenceUnit!.Value)}\n📅 Следующий платеж: {draft.NextPaymentDate:dd.MM.yyyy}\n\nСохранить платеж?";
 
     private static bool TryParseRecurrence(string input, out RecurrenceUnit unit)
     {
@@ -543,17 +578,31 @@ public sealed class PaymentConversationService(
         return true;
     }
 
-    private static bool TryParseMonthDay(string input, out int day, out bool lastDay)
+    internal static bool TryParseMonthDay(string input, out int day, out bool lastDay)
     {
-        lastDay = input.Trim().Equals("последний день", StringComparison.OrdinalIgnoreCase)
-            || input.Trim().Equals("последний день месяца", StringComparison.OrdinalIgnoreCase);
+        var normalized = input.Trim().ToLowerInvariant();
+        lastDay = normalized is "последний день" or "последний день месяца";
         if (lastDay)
         {
             day = 31;
             return true;
         }
-        return int.TryParse(input.Trim(), out day) && day is >= 1 and <= 31;
+        if (normalized is "1-е число" or "первое число")
+        {
+            day = 1;
+            return true;
+        }
+        if (normalized is "15-е число" or "пятнадцатое число")
+        {
+            day = 15;
+            return true;
+        }
+        return int.TryParse(normalized, out day) && day is >= 1 and <= 31;
     }
+
+    internal static bool IsCustomDate(string input) =>
+        input.Trim().Equals("произвольная дата", StringComparison.OrdinalIgnoreCase)
+        || input.Trim().Equals("другая дата", StringComparison.OrdinalIgnoreCase);
 
     private static bool TryParseWeekday(string input, out DayOfWeek weekday)
     {
@@ -569,14 +618,6 @@ public sealed class PaymentConversationService(
             _ => (DayOfWeek)(-1)
         };
         return weekday >= DayOfWeek.Sunday && weekday <= DayOfWeek.Saturday;
-    }
-
-    private static DateOnly NextMonthlyDate(DateOnly today, int day, bool lastDay)
-    {
-        var candidate = new DateOnly(today.Year, today.Month, lastDay ? DateTime.DaysInMonth(today.Year, today.Month) : Math.Min(day, DateTime.DaysInMonth(today.Year, today.Month)));
-        return candidate < today
-            ? new DateOnly(today.AddMonths(1).Year, today.AddMonths(1).Month, lastDay ? DateTime.DaysInMonth(today.AddMonths(1).Year, today.AddMonths(1).Month) : Math.Min(day, DateTime.DaysInMonth(today.AddMonths(1).Year, today.AddMonths(1).Month)))
-            : candidate;
     }
 
     private static DateOnly NextWeekday(DateOnly today, DayOfWeek weekday)
@@ -604,8 +645,9 @@ public sealed class PaymentConversationService(
         Amount = 1,
         Recurrence = 2,
         Schedule = 3,
-        NextPaymentDate = 4,
-        Confirmation = 5
+        MonthlyDate = 4,
+        NextPaymentDate = 5,
+        Confirmation = 6
     }
 }
 
@@ -694,6 +736,8 @@ public sealed class PaymentEditConversationService(
                 draft.Amount = fieldAmount;
                 return await SaveFieldAsync(userId, state, draft, cancellationToken);
             case PaymentEditStep.FieldSchedule:
+                if (draft.RecurrenceUnit == RecurrenceUnit.Month && PaymentConversationService.IsCustomDate(input))
+                    return "📅 Укажите дату первого платежа в формате ДД.ММ.ГГГГ:";
                 if (!DateOnly.TryParseExact(input, new[] { "dd.MM.yyyy", "yyyy-MM-dd" }, CultureInfo.InvariantCulture, DateTimeStyles.None, out var fieldDate))
                     return "Введите дату в формате ДД.ММ.ГГГГ, например 26.09.2026:";
                 if (fieldDate < draft.Today)
@@ -706,10 +750,26 @@ public sealed class PaymentEditConversationService(
                 if (!TryParseRecurrence(input, out var fieldRecurrence))
                     return "Выберите периодичность кнопкой ниже:";
                 draft.RecurrenceUnit = fieldRecurrence;
-                draft.Step = PaymentEditStep.FieldSchedule;
+                draft.Step = fieldRecurrence == RecurrenceUnit.Month
+                    ? PaymentEditStep.FieldMonthlySchedule
+                    : PaymentEditStep.FieldSchedule;
                 state.UpdatePayload(JsonSerializer.Serialize(draft), DateTime.UtcNow);
                 await states.SaveChangesAsync(cancellationToken);
                 return Prompt(draft);
+            case PaymentEditStep.FieldMonthlySchedule:
+                if (PaymentConversationService.IsCustomDate(input))
+                {
+                    draft.Step = PaymentEditStep.FieldSchedule;
+                    state.UpdatePayload(JsonSerializer.Serialize(draft), DateTime.UtcNow);
+                    await states.SaveChangesAsync(cancellationToken);
+                    return Prompt(draft);
+                }
+                if (!PaymentConversationService.TryParseMonthDay(input, out var fieldMonthDay, out var fieldLastDay))
+                    return "Выберите 1-е число, 15-е число, последний день или произвольную дату:";
+                draft.ScheduleDayOfMonth = fieldMonthDay;
+                draft.IsLastDayOfMonth = fieldLastDay;
+                draft.NextPaymentDate = MonthlyScheduleDates.Next(draft.Today, fieldMonthDay, fieldLastDay);
+                return await SaveFieldAsync(userId, state, draft, cancellationToken);
             case PaymentEditStep.FieldMethod:
                 if (!TryParsePaymentMethod(input, out var fieldMethod))
                     return "Выберите способ оплаты: карта, банковский перевод, наличные или другое.";
@@ -844,7 +904,8 @@ public sealed class PaymentEditConversationService(
         PaymentEditStep.FieldName => "Введите новое название:",
         PaymentEditStep.FieldAmount => $"Текущая сумма: {draft.Amount:0.##} {draft.Currency}\n\nВведите новую сумму:",
         PaymentEditStep.FieldScheduleRecurrence => "Как часто нужно платить?",
-        PaymentEditStep.FieldSchedule => $"Периодичность: {PaymentDisplayNames.Recurrence(draft.RecurrenceInterval, draft.RecurrenceUnit!.Value)}\n\nВведите следующую дату в формате ДД.ММ.ГГГГ:",
+        PaymentEditStep.FieldMonthlySchedule => "Периодичность: каждый месяц\n\n📅 Выберите день месяца:",
+        PaymentEditStep.FieldSchedule => $"Периодичность: {PaymentDisplayNames.Recurrence(draft.RecurrenceInterval, draft.RecurrenceUnit!.Value)}\n\n📅 Укажите дату платежа в формате ДД.ММ.ГГГГ:",
         PaymentEditStep.FieldMethod => "Выберите новый способ оплаты:",
         PaymentEditStep.FieldAutoDebit => "Автосписание включено?",
         PaymentEditStep.FieldDescription => "Введите комментарий или нажмите «Без комментария»:",
@@ -962,6 +1023,7 @@ public sealed class PaymentEditConversationService(
         Confirmation,
         FieldAmount,
         FieldScheduleRecurrence,
+        FieldMonthlySchedule,
         FieldSchedule,
         FieldMethod,
         FieldAutoDebit,
