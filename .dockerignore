@@ -1,0 +1,11 @@
+.git
+.github
+.vs
+**/bin
+**/obj
+.env
+backups
+*.dump
+*.sql
+*.sql.gz
+*.log

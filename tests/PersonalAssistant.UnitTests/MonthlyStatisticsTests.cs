@@ -24,7 +24,7 @@ public sealed class MonthlyStatisticsTests
 
         var statistics = await new PaymentService(repository).GetMonthlyStatisticsAsync(userId, 2026, 8, CancellationToken.None);
 
-        var rubStats = Assert.Single(statistics.Where(x => x.Currency == "RUB"));
+        var rubStats = Assert.Single(statistics, x => x.Currency == "RUB");
         Assert.Equal(100, rubStats.PlannedAmount);
         Assert.Equal(90, rubStats.PaidAmount);
         Assert.Equal(10, rubStats.RemainingAmount);
@@ -32,7 +32,7 @@ public sealed class MonthlyStatisticsTests
         Assert.Equal(1, rubStats.PaidCount);
         Assert.Equal(0, rubStats.UnpaidCount);
 
-        var usdStats = Assert.Single(statistics.Where(x => x.Currency == "USD"));
+        var usdStats = Assert.Single(statistics, x => x.Currency == "USD");
         Assert.Equal(20, usdStats.PlannedAmount);
         Assert.Equal(0, usdStats.PaidAmount);
         Assert.Equal(1, usdStats.UnpaidCount);
