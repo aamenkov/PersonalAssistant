@@ -580,8 +580,8 @@ internal sealed class TelegramPollingService(
                 var summary = first is null
                     ? "На ближайшие 7 дней платить ничего не нужно 👍"
                     : first.IsOverdue
-                        ? $"⚠️ Есть просроченный платеж:\n\n{first.Name} — {TelegramPresentation.Money(first.Amount, first.Currency)}\nСрок был {TelegramPresentation.Date(first.DueDate, today)}"
-                        : $"Ближайший платеж:\n\n{first.Name} — {TelegramPresentation.Money(first.Amount, first.Currency)}\n{TelegramPresentation.Date(first.DueDate, today, true)} · {TelegramPresentation.RelativeDays(first.DaysFromToday)}";
+                        ? $"⚠️ Есть просроченный платеж:\n\n{TelegramUi.FormatUpcomingCard(first, today)}"
+                        : $"Ближайший платеж:\n\n{TelegramUi.FormatUpcomingCard(first, today)}";
                 await client.SendMessage(update.Message.Chat.Id, $"С возвращением 👋\n\n{summary}", replyMarkup: TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(from.Id)), cancellationToken: cancellationToken);
             }
             else
