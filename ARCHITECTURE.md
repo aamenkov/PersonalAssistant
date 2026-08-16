@@ -22,6 +22,92 @@ flowchart LR
 
 Регистрация и настройка профиля реализованы через `UserRegistrationService` и `UserTimeZoneService`; Telegram-обработчик только переводит Update в вызов application-сервиса.
 
+## Карта ключевых классов
+
+Диаграмма показывает основные runtime-связи. DTO, перечисления и EF-конфигурации намеренно не включены: они описаны в соответствующих проектах и не являются самостоятельными координаторами сценариев.
+
+```mermaid
+classDiagram
+    class TelegramPollingService
+    class TelegramUi
+    class TelegramCallbackData
+    class ReminderBackgroundService
+    class BotAccessPolicy
+
+    class PaymentService
+    class PaymentConversationService
+    class PaymentEditConversationService
+    class PaymentRecordConversationService
+    class ReminderService
+    class ReminderSnoozeService
+    class UserRegistrationService
+    class UserSettingsService
+    class TimeZoneConversationService
+    class AdminService
+    class UserUpdateGate
+
+    class PaymentDateCalculator
+    class TimeZoneResolver
+    class User
+    class RecurringPayment
+    class PaymentTransaction
+    class Reminder
+    class ConversationState
+
+    class PersonalAssistantDbContext
+    class UserRepository
+    class PaymentRepository
+    class ReminderRepository
+    class ConversationStateRepository
+    class TelegramUpdateStore
+
+    TelegramPollingService --> TelegramUi
+    TelegramPollingService --> TelegramCallbackData
+    TelegramPollingService --> PaymentService
+    TelegramPollingService --> PaymentConversationService
+    TelegramPollingService --> PaymentEditConversationService
+    TelegramPollingService --> PaymentRecordConversationService
+    TelegramPollingService --> UserRegistrationService
+    TelegramPollingService --> UserSettingsService
+    TelegramPollingService --> TimeZoneConversationService
+    TelegramPollingService --> AdminService
+    TelegramPollingService --> BotAccessPolicy
+    TelegramPollingService --> UserUpdateGate
+
+    ReminderBackgroundService --> ReminderService
+    ReminderBackgroundService --> ReminderSnoozeService
+
+    PaymentConversationService --> PaymentService
+    PaymentEditConversationService --> PaymentService
+    PaymentRecordConversationService --> PaymentService
+    PaymentService --> PaymentDateCalculator
+    ReminderService --> PaymentDateCalculator
+    TimeZoneConversationService --> TimeZoneResolver
+
+    UserRegistrationService --> UserRepository
+    UserSettingsService --> UserRepository
+    PaymentService --> PaymentRepository
+    ReminderService --> ReminderRepository
+    ReminderSnoozeService --> ReminderRepository
+    PaymentConversationService --> ConversationStateRepository
+    PaymentEditConversationService --> ConversationStateRepository
+    PaymentRecordConversationService --> ConversationStateRepository
+    TelegramPollingService --> TelegramUpdateStore
+
+    PaymentRepository --> PersonalAssistantDbContext
+    UserRepository --> PersonalAssistantDbContext
+    ReminderRepository --> PersonalAssistantDbContext
+    ConversationStateRepository --> PersonalAssistantDbContext
+    TelegramUpdateStore --> PersonalAssistantDbContext
+
+    User "1" --> "many" RecurringPayment
+    RecurringPayment "1" --> "many" PaymentTransaction
+    RecurringPayment "1" --> "many" Reminder
+    User "1" --> "1" ConversationState
+```
+
+Граница ответственности остается простой: `TelegramPollingService` маршрутизирует события, application-сервисы выполняют сценарии, домен считает даты и хранит правила, а Infrastructure предоставляет PostgreSQL-реализации интерфейсов. Новые классы следует добавлять только при появлении отдельной ответственности, а не для дробления существующего кода.
+
 В Telegram-проекте `Program.cs` содержит запуск web host, регистрацию зависимостей и текущую orchestration-логику polling-сервиса. `BotAccessPolicy` отвечает за ограничение доступа. `TelegramUi` содержит клавиатуры, отображение платежей, истории и статистики, преобразование команд и локальную дату. `TelegramCallbackData` централизует префиксы и построение callback-значений. Это не переносит бизнес-правила в Bot: компоненты UI только преобразуют данные в формат Telegram. Небольшой health endpoint размещен в том же host, чтобы Docker/VPS могли проверить доступность приложения и PostgreSQL.
 
 Создание платежа реализовано через `PaymentConversationService`: каждый шаг сериализуется в `ConversationState.PayloadJson`, поэтому диалог не теряется после перезапуска. `PaymentService` создает платеж только с переданным `UserId`, а `PaymentRepository` фильтрует выборки по владельцу и активности.

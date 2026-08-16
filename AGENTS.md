@@ -48,16 +48,19 @@ Solution: `PersonalAssistant.sln`.
 - `src/PersonalAssistant.Application/PaymentServices.cs` — операции с платежами, статистика и сценарии создания, редактирования и записи оплаты.
 - `PaymentService.GetMonthlyStatisticsAsync` в `PaymentServices.cs` — месячная статистика.
 - `src/PersonalAssistant.Application/ReminderServices.cs` — расчет напоминаний и защита от повторной заявки.
-- `src/PersonalAssistant.Application/UserRegistrationService.cs` — регистрация и настройки пользователя.
+- `src/PersonalAssistant.Application/UserRegistrationService.cs` — регистрация, часовой пояс и настройки пользователя.
 - `src/PersonalAssistant.Application/TimeZoneConversationService.cs` — определение российского UTC-смещения по введенному местному времени.
 - `src/PersonalAssistant.Application/AdminService.cs` — административные операции над данными текущего пользователя.
 - `src/PersonalAssistant.Application/DateShortcutCalculator.cs` — быстрые варианты дат.
+- `src/PersonalAssistant.Application/ReminderSnoozeService.cs` — отложенные напоминания и их расчет.
+- `src/PersonalAssistant.Application/UserUpdateGate.cs` — последовательная обработка обновлений одного пользователя.
 
 ### Infrastructure
 
 - `src/PersonalAssistant.Infrastructure/PersonalAssistantDbContext.cs` — EF Core DbContext и реализации репозиториев.
 - `src/PersonalAssistant.Infrastructure/Migrations/` — миграции PostgreSQL.
 - `src/PersonalAssistant.Infrastructure/DependencyInjection.cs` — регистрация инфраструктурных зависимостей.
+- `src/PersonalAssistant.Infrastructure/TelegramUpdateStore.cs` — сохранение обработанных Telegram Update.
 
 ### Telegram / Bot
 
