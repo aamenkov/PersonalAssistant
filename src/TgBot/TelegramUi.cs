@@ -89,18 +89,19 @@ internal static class TelegramUi
         $"{PaymentDisplayNames.PaymentMethodIcon(payment.PaymentMethod)}{(payment.IsAutoDebit ? " 🤖" : string.Empty)} {payment.Name}\n\n" +
         $"{TelegramPresentation.Money(payment.Amount, payment.Currency)} · " +
         $"{TelegramPresentation.Schedule(payment.RecurrenceInterval, payment.RecurrenceUnit, payment.DueDate, today)}\n" +
-        $"Следующий платеж: {TelegramPresentation.Date(payment.DueDate, today, true)}";
+        $"Следующий платеж: {TelegramPresentation.Date(payment.DueDate, today)}";
 
     public static string FormatUpcomingCard(UpcomingPaymentItem payment, DateOnly today) =>
         $"{(payment.IsOverdue ? "⚠️" : PaymentDisplayNames.PaymentMethodIcon(payment.PaymentMethod))} {payment.Name}\n\n" +
-        $"{TelegramPresentation.Money(payment.Amount, payment.Currency)}\n" +
+        $"{TelegramPresentation.Money(payment.Amount, payment.Currency)} · " +
+        $"{TelegramPresentation.Schedule(payment.RecurrenceInterval, payment.RecurrenceUnit, payment.DueDate, today)}\n" +
         (payment.IsOverdue
             ? $"Срок был {TelegramPresentation.Date(payment.DueDate, today)}"
             : payment.DaysFromToday switch
             {
                 0 => "сегодня",
                 1 => "завтра",
-                _ => $"{TelegramPresentation.Date(payment.DueDate, today, true)} · {TelegramPresentation.RelativeDays(payment.DaysFromToday)}"
+                _ => $"{TelegramPresentation.Date(payment.DueDate, today)} · {TelegramPresentation.RelativeDays(payment.DaysFromToday)}"
             });
 
     public static string FormatUpcoming(IReadOnlyList<UpcomingPaymentItem> payments, DateOnly today, int windowDays)
@@ -226,11 +227,11 @@ internal static class TelegramUi
         if (annual.Count == 0)
             return monthlyText;
 
-        var annualTitle = $"📅 Прогноз на {year} год";
+        var annualTitle = $"📅 {year} год";
         var annualLines = annual.Select(x =>
             $"{annualTitle}\n\n" +
-            $"Запланировано за год: {TelegramPresentation.Money(x.PlannedAmount, x.Currency)}\n" +
-            $"✅ Уже оплачено: {TelegramPresentation.Money(x.PaidAmount, x.Currency)}\n" +
+            $"Запланировано: {TelegramPresentation.Money(x.PlannedAmount, x.Currency)}\n" +
+            $"✅ Оплачено: {TelegramPresentation.Money(x.PaidAmount, x.Currency)}\n" +
             $"⏳ Осталось: {TelegramPresentation.Money(x.RemainingAmount, x.Currency)}\n" +
             $"Платежей: оплачено {x.PaidCount} из {x.PlannedCount}");
         return monthlyText + "\n\n" + string.Join("\n\n", annualLines);

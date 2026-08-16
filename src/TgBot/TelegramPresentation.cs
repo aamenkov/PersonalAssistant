@@ -36,9 +36,15 @@ internal static class TelegramPresentation
         0 => "сегодня",
         1 => "завтра",
         -1 => "вчера",
-        > 1 => $"через {days} дн.",
-        _ => $"{Math.Abs(days)} дн. назад"
+        > 1 => $"через {days} {RussianDays(days)}",
+        _ => $"{Math.Abs(days)} {RussianDays(Math.Abs(days))} назад"
     };
+
+    private static string RussianDays(int days) => days % 10 == 1 && days % 100 != 11
+        ? "день"
+        : days % 10 is >= 2 and <= 4 && (days % 100 < 10 || days % 100 >= 20)
+            ? "дня"
+            : "дней";
 
     public static string Schedule(int interval, RecurrenceUnit unit, DateOnly nextDate, DateOnly today)
     {
