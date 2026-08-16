@@ -47,15 +47,30 @@ internal static class TelegramUi
         new[] { InlineKeyboardButton.WithCallbackData("Евро (EUR)", TelegramCallbackData.Setting("currency", "EUR")) }
     });
 
-    public static ReplyKeyboardMarkup MainMenuKeyboard() => new(new[]
+    public static ReplyKeyboardMarkup MainMenuKeyboard(bool isAdmin = false)
     {
-        new KeyboardButton[] { "💳 Ближайшие платежи", "➕ Добавить платеж" },
-        new KeyboardButton[] { "📋 Все платежи", "📊 Статистика" },
-        new KeyboardButton[] { "⚙️ Настройки" }
-    }) { ResizeKeyboard = true };
+        var rows = new List<KeyboardButton[]>
+        {
+            new KeyboardButton[] { "💳 Ближайшие платежи", "➕ Добавить платеж" },
+            new KeyboardButton[] { "📋 Все платежи", "📊 Статистика" },
+            new KeyboardButton[] { "⚙️ Настройки" }
+        };
+        if (isAdmin)
+            rows.Add(new KeyboardButton[] { "🛠 Админская панель" });
+        return new ReplyKeyboardMarkup(rows) { ResizeKeyboard = true };
+    }
+
+    public static InlineKeyboardMarkup AdminKeyboard() => new(new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("🗑 Очистить историю оплат", TelegramCallbackData.Admin("clear-history")) },
+        new[] { InlineKeyboardButton.WithCallbackData("⚠️ Удалить платежи и историю", TelegramCallbackData.Admin("delete-payments")) }
+    });
 
     public static ReplyKeyboardMarkup? ConversationKeyboard(string response) =>
         IsCompleted(response) ? MainMenuKeyboard() : AddStepKeyboard(response);
+
+    public static ReplyKeyboardMarkup? ConversationKeyboard(string response, bool isAdmin) =>
+        IsCompleted(response) ? MainMenuKeyboard(isAdmin) : AddStepKeyboard(response);
 
     public static string FormatPayments(IReadOnlyList<PaymentListItem> payments, bool upcoming)
     {
@@ -69,7 +84,7 @@ internal static class TelegramUi
     }
 
     public static string FormatPaymentCard(PaymentListItem payment, DateOnly today) =>
-        $"{(payment.IsAutoDebit ? "🤖" : "💳")} {payment.Name}\n\n" +
+        $"{PaymentDisplayNames.PaymentMethodIcon(payment.PaymentMethod)}{(payment.IsAutoDebit ? " 🤖" : string.Empty)} {payment.Name}\n\n" +
         $"{TelegramPresentation.Money(payment.Amount, payment.Currency)} · " +
         $"{TelegramPresentation.Schedule(payment.RecurrenceInterval, payment.RecurrenceUnit, payment.DueDate, today)}\n" +
         $"Следующий платеж: {TelegramPresentation.Date(payment.DueDate, today, true)}";
@@ -228,6 +243,7 @@ internal static class TelegramUi
         "Статистика" => "/stats",
         "История" => "/history",
         "Настройки" => "/settings",
+        "🛠 Админская панель" or "Админская панель" => "/admin",
         "Помощь" => "/help",
         _ => GetSlashCommand(text)
     };
@@ -274,6 +290,20 @@ internal static class TelegramUi
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Ожидаемая сумма" }, new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("Без комментария", StringComparison.OrdinalIgnoreCase))
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Без комментария" }, new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        if (response.Contains("дату", StringComparison.OrdinalIgnoreCase) || response.Contains("Сегодня", StringComparison.OrdinalIgnoreCase))
+        {
+            var rows = new List<KeyboardButton[]>
+            {
+                new KeyboardButton[] { "Сегодня", "Завтра" },
+                new KeyboardButton[] { "Через неделю" },
+                new KeyboardButton[] { "Первое число следующего месяца" },
+                new KeyboardButton[] { "То же число следующего месяца" }
+            };
+            if (response.Contains("Оставить текущее", StringComparison.OrdinalIgnoreCase))
+                rows.Add(new KeyboardButton[] { "Оставить текущее" });
+            rows.Add(new KeyboardButton[] { "Отмена" });
+            return new ReplyKeyboardMarkup(rows) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        }
         if (response.Contains("периодичность", StringComparison.OrdinalIgnoreCase) || response.Contains("как часто", StringComparison.OrdinalIgnoreCase))
         {
             var rows = new List<KeyboardButton[]>
@@ -306,20 +336,6 @@ internal static class TelegramUi
                 new KeyboardButton[] { "Воскресенье" },
                 new KeyboardButton[] { "Отмена" }
             }) { ResizeKeyboard = true, OneTimeKeyboard = true };
-        if (response.Contains("дату", StringComparison.OrdinalIgnoreCase) || response.Contains("Сегодня", StringComparison.OrdinalIgnoreCase))
-        {
-            var rows = new List<KeyboardButton[]>
-            {
-                new KeyboardButton[] { "Сегодня", "Завтра" },
-                new KeyboardButton[] { "Через неделю" },
-                new KeyboardButton[] { "Первое число следующего месяца" },
-                new KeyboardButton[] { "То же число следующего месяца" }
-            };
-            if (response.Contains("Оставить текущее", StringComparison.OrdinalIgnoreCase))
-                rows.Add(new KeyboardButton[] { "Оставить текущее" });
-            rows.Add(new KeyboardButton[] { "Отмена" });
-            return new ReplyKeyboardMarkup(rows) { ResizeKeyboard = true, OneTimeKeyboard = true };
-        }
         if (response.Contains("Оставить текущее", StringComparison.OrdinalIgnoreCase))
             return new ReplyKeyboardMarkup(new[] { new KeyboardButton[] { "Оставить текущее" }, new KeyboardButton[] { "Отмена" } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
         if (response.Contains("отмена", StringComparison.OrdinalIgnoreCase))

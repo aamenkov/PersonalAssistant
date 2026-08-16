@@ -23,6 +23,7 @@ builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<UserRegistrationService>();
 builder.Services.AddScoped<UserTimeZoneService>();
 builder.Services.AddScoped<UserSettingsService>();
+builder.Services.AddScoped<AdminService>();
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddScoped<IReminderRepository, ReminderRepository>();
 builder.Services.AddScoped<ITelegramUpdateStore, TelegramUpdateStore>();
@@ -34,7 +35,18 @@ builder.Services.AddScoped<PaymentConversationService>();
 builder.Services.AddScoped<PaymentEditConversationService>();
 builder.Services.AddScoped<PaymentRecordConversationService>();
 builder.Services.AddSingleton<UserUpdateGate>();
-builder.Services.AddSingleton(BotAccessPolicy.Parse(builder.Configuration["Telegram:AllowedUserIds"]));
+var configuredAdminId = builder.Configuration["Telegram:AdminUserId"];
+long? configuredAdminIdValue = null;
+if (!string.IsNullOrWhiteSpace(configuredAdminId))
+{
+    if (!long.TryParse(configuredAdminId, out var parsedAdminId))
+        throw new InvalidOperationException("Telegram:AdminUserId contains an invalid value.");
+    configuredAdminIdValue = parsedAdminId;
+}
+
+var accessPolicy = BotAccessPolicy.Parse(builder.Configuration["Telegram:AllowedUserIds"], configuredAdminIdValue);
+builder.Services.AddSingleton(accessPolicy);
+builder.Services.AddSingleton(BotAdminPolicy.Parse(configuredAdminId, accessPolicy));
 builder.Services.AddSingleton<ITelegramBotClient>(_ => new TelegramBotClient(botToken));
 builder.Services.AddHostedService<TelegramPollingService>();
 builder.Services.AddHostedService<ReminderBackgroundService>();
@@ -81,6 +93,7 @@ internal sealed class TelegramPollingService(
     IServiceScopeFactory scopeFactory,
     UserUpdateGate updateGate,
     BotAccessPolicy accessPolicy,
+    BotAdminPolicy adminPolicy,
     ILogger<TelegramPollingService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -134,6 +147,84 @@ internal sealed class TelegramPollingService(
 
     private async Task HandleUpdateCoreAsync(ITelegramBotClient client, Update update, CancellationToken cancellationToken)
     {
+        if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery?.Data is { } adminData
+            && adminData.StartsWith(TelegramCallbackData.AdminPrefix, StringComparison.Ordinal))
+        {
+            if (!adminPolicy.IsAdmin(update.CallbackQuery.From.Id))
+            {
+                await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Доступ запрещен", showAlert: true, cancellationToken: cancellationToken);
+                return;
+            }
+
+            using var adminScope = scopeFactory.CreateScope();
+            var adminUser = await adminScope.ServiceProvider.GetRequiredService<IUserRepository>()
+                .FindByTelegramUserIdAsync(update.CallbackQuery.From.Id, cancellationToken);
+            if (adminUser is null)
+            {
+                await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Сначала выполните /start", showAlert: true, cancellationToken: cancellationToken);
+                return;
+            }
+
+            if (adminData == TelegramCallbackData.Admin("clear-history"))
+            {
+                await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Подтвердите очистку", cancellationToken: cancellationToken);
+                if (update.CallbackQuery.Message is { } adminMessage)
+                    await client.SendMessage(adminMessage.Chat.Id,
+                        "Удалить всю историю оплат текущего пользователя? Платежи и их расписания останутся.",
+                        replyMarkup: new InlineKeyboardMarkup(new[]
+                        {
+                            new[]
+                            {
+                                InlineKeyboardButton.WithCallbackData("Да, очистить", TelegramCallbackData.Admin("clear-history-confirm")),
+                                InlineKeyboardButton.WithCallbackData("Отмена", TelegramCallbackData.Admin("cancel"))
+                            }
+                        }), cancellationToken: cancellationToken);
+                return;
+            }
+
+            if (adminData == TelegramCallbackData.Admin("delete-payments"))
+            {
+                await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Подтвердите удаление", cancellationToken: cancellationToken);
+                if (update.CallbackQuery.Message is { } adminMessage)
+                    await client.SendMessage(adminMessage.Chat.Id,
+                        "Удалить все платежи и всю историю текущего пользователя? Это действие нельзя отменить.",
+                        replyMarkup: new InlineKeyboardMarkup(new[]
+                        {
+                            new[]
+                            {
+                                InlineKeyboardButton.WithCallbackData("Да, удалить всё", TelegramCallbackData.Admin("delete-payments-confirm")),
+                                InlineKeyboardButton.WithCallbackData("Отмена", TelegramCallbackData.Admin("cancel"))
+                            }
+                        }), cancellationToken: cancellationToken);
+                return;
+            }
+
+            if (adminData == TelegramCallbackData.Admin("clear-history-confirm"))
+            {
+                var deleted = await adminScope.ServiceProvider.GetRequiredService<AdminService>()
+                    .ClearPaymentHistoryAsync(adminUser.Id, cancellationToken);
+                await client.AnswerCallbackQuery(update.CallbackQuery.Id, "История очищена", cancellationToken: cancellationToken);
+                if (update.CallbackQuery.Message is { } adminMessage)
+                    await client.SendMessage(adminMessage.Chat.Id, $"Готово. Удалено записей оплат: {deleted}.",
+                        replyMarkup: TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
+                return;
+            }
+
+            if (adminData == TelegramCallbackData.Admin("delete-payments-confirm"))
+            {
+                var deleted = await adminScope.ServiceProvider.GetRequiredService<AdminService>()
+                    .DeleteAllPaymentsAsync(adminUser.Id, cancellationToken);
+                await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Платежи удалены", cancellationToken: cancellationToken);
+                if (update.CallbackQuery.Message is { } adminMessage)
+                    await client.SendMessage(adminMessage.Chat.Id, $"Готово. Удалено платежей: {deleted}. История оплат также удалена.",
+                        replyMarkup: TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
+                return;
+            }
+
+            await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Действие отменено", cancellationToken: cancellationToken);
+            return;
+        }
+
         if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery?.Data is { } snoozeData
             && snoozeData.StartsWith(TelegramCallbackData.ReminderPrefix + "snooze:", StringComparison.Ordinal))
         {
@@ -184,7 +275,7 @@ internal sealed class TelegramPollingService(
                 var timeZone = TimeZoneInfo.FindSystemTimeZoneById(snoozeUser.TimeZoneId);
                 var localUntil = TimeZoneInfo.ConvertTimeFromUtc(snoozeResult.SnoozedUntilUtc, timeZone);
                 await client.SendMessage(resultMessage.Chat.Id, $"⏰ Хорошо, напомню {localUntil:dd.MM.yyyy в HH\\:mm}.",
-                    replyMarkup: TelegramUi.MainMenuKeyboard(), cancellationToken: cancellationToken);
+                    replyMarkup: TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
             }
             return;
         }
@@ -223,7 +314,7 @@ internal sealed class TelegramPollingService(
                 var response = await recorder.BeginAsync(user.Id, paymentId, LocalDate(user.TimeZoneId), cancellationToken);
                 await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
                 if (update.CallbackQuery.Message is { } message)
-                    await client.SendMessage(message.Chat.Id, response, replyMarkup: ConversationKeyboard(response), cancellationToken: cancellationToken);
+                    await client.SendMessage(message.Chat.Id, response, replyMarkup: TelegramUi.ConversationKeyboard(response, adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
                 return;
             }
 
@@ -277,7 +368,7 @@ internal sealed class TelegramPollingService(
                 var deactivated = await payments.DeactivateAsync(user.Id, paymentId, cancellationToken);
                 await client.AnswerCallbackQuery(update.CallbackQuery.Id, deactivated ? "Платеж отключен" : "Платеж не найден", cancellationToken: cancellationToken);
                 if (update.CallbackQuery.Message is { } message)
-                    await client.SendMessage(message.Chat.Id, deactivated ? "Платеж отключен. История оплат сохранена." : "Платеж не найден или уже отключен.", replyMarkup: MainMenuKeyboard(), cancellationToken: cancellationToken);
+                    await client.SendMessage(message.Chat.Id, deactivated ? "Платеж отключен. История оплат сохранена." : "Платеж не найден или уже отключен.", replyMarkup: TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
                 return;
             }
 
@@ -307,7 +398,7 @@ internal sealed class TelegramPollingService(
             var response = await editor.BeginFieldAsync(user.Id, paymentId, parts[1], LocalDate(user.TimeZoneId), cancellationToken);
             await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
             if (update.CallbackQuery.Message is { } message)
-                await client.SendMessage(message.Chat.Id, response, replyMarkup: ConversationKeyboard(response), cancellationToken: cancellationToken);
+                    await client.SendMessage(message.Chat.Id, response, replyMarkup: TelegramUi.ConversationKeyboard(response, adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
             return;
         }
 
@@ -362,7 +453,7 @@ internal sealed class TelegramPollingService(
                 await timeZones.SetAsync(update.CallbackQuery.From.Id, timeZoneId, cancellationToken);
                 await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Часовой пояс сохранен", cancellationToken: cancellationToken);
                 if (update.CallbackQuery.Message is { } callbackMessage)
-                    await client.SendMessage(callbackMessage.Chat.Id, $"Готово. Часовой пояс: {TelegramPresentation.TimeZone(timeZoneId)}.", replyMarkup: MainMenuKeyboard(), cancellationToken: cancellationToken);
+                    await client.SendMessage(callbackMessage.Chat.Id, $"Готово. Часовой пояс: {TelegramPresentation.TimeZone(timeZoneId)}.", replyMarkup: TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
             }
             catch (Exception exception) when (exception is TimeZoneNotFoundException or InvalidTimeZoneException)
             {
@@ -471,7 +562,7 @@ internal sealed class TelegramPollingService(
                     : first.IsOverdue
                         ? $"⚠️ Есть просроченный платеж:\n\n{first.Name} — {TelegramPresentation.Money(first.Amount, first.Currency)}\nСрок был {TelegramPresentation.Date(first.DueDate, today)}"
                         : $"Ближайший платеж:\n\n{first.Name} — {TelegramPresentation.Money(first.Amount, first.Currency)}\n{TelegramPresentation.Date(first.DueDate, today, true)} · {TelegramPresentation.RelativeDays(first.DaysFromToday)}";
-                await client.SendMessage(update.Message.Chat.Id, $"С возвращением 👋\n\n{summary}", replyMarkup: MainMenuKeyboard(), cancellationToken: cancellationToken);
+                await client.SendMessage(update.Message.Chat.Id, $"С возвращением 👋\n\n{summary}", replyMarkup: TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(from.Id)), cancellationToken: cancellationToken);
             }
             else
                 await client.SendMessage(update.Message.Chat.Id,
@@ -490,7 +581,7 @@ internal sealed class TelegramPollingService(
             }
 
             var conversations = scope.ServiceProvider.GetRequiredService<PaymentConversationService>();
-            await client.SendMessage(update.Message.Chat.Id, await conversations.BeginAsync(user.Id, user.DefaultCurrency, LocalDate(user.TimeZoneId), cancellationToken), replyMarkup: AddStepKeyboard("Введите название платежа:"), cancellationToken: cancellationToken);
+            await client.SendMessage(update.Message.Chat.Id, await conversations.BeginAsync(user.Id, user.DefaultCurrency, LocalDate(user.TimeZoneId), cancellationToken), replyMarkup: TelegramUi.ConversationKeyboard("Введите название платежа:", adminPolicy.IsAdmin(from.Id)), cancellationToken: cancellationToken);
         }
         else if (command == "/upcoming")
         {
@@ -508,7 +599,7 @@ internal sealed class TelegramPollingService(
             var items = await payments.GetUpcomingAsync(user.Id, today, 6, cancellationToken);
             if (items.Count == 0)
             {
-                await client.SendMessage(update.Message.Chat.Id, "💳 Ближайшие платежи\n\nНа ближайшие 7 дней платить ничего не нужно 👍", replyMarkup: MainMenuKeyboard(), cancellationToken: cancellationToken);
+                await client.SendMessage(update.Message.Chat.Id, "💳 Ближайшие платежи\n\nНа ближайшие 7 дней платить ничего не нужно 👍", replyMarkup: TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(from.Id)), cancellationToken: cancellationToken);
                 return;
             }
 
@@ -532,7 +623,7 @@ internal sealed class TelegramPollingService(
             var items = await payments.GetActiveAsync(user.Id, null, null, cancellationToken);
             if (items.Count == 0)
             {
-                await client.SendMessage(update.Message.Chat.Id, "📋 Активных платежей пока нет.", replyMarkup: MainMenuKeyboard(), cancellationToken: cancellationToken);
+                await client.SendMessage(update.Message.Chat.Id, "📋 Активных платежей пока нет.", replyMarkup: TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(from.Id)), cancellationToken: cancellationToken);
                 return;
             }
 
@@ -615,6 +706,18 @@ internal sealed class TelegramPollingService(
             await client.SendMessage(update.Message.Chat.Id, FormatStatistics(year, month, statistics, annual),
                 replyMarkup: TelegramUi.MonthNavigationKeyboard("stats:", year, month), cancellationToken: cancellationToken);
         }
+        else if (command == "/admin")
+        {
+            if (!adminPolicy.IsAdmin(from.Id))
+            {
+                await client.SendMessage(update.Message.Chat.Id, "Доступ к админской панели запрещен.", cancellationToken: cancellationToken);
+                return;
+            }
+
+            await client.SendMessage(update.Message.Chat.Id,
+                "🛠 Админская панель\n\nДействия выполняются только для текущего пользователя и требуют подтверждения.",
+                replyMarkup: TelegramUi.AdminKeyboard(), cancellationToken: cancellationToken);
+        }
         else if (command == "/settings")
         {
             using var scope = scopeFactory.CreateScope();
@@ -654,7 +757,7 @@ internal sealed class TelegramPollingService(
                     || response.Contains("сохранен", StringComparison.OrdinalIgnoreCase)
                     || response.Contains("обновлен", StringComparison.OrdinalIgnoreCase);
                 await client.SendMessage(update.Message.Chat.Id, response,
-                    replyMarkup: finished ? MainMenuKeyboard() : ConversationKeyboard(response), cancellationToken: cancellationToken);
+                    replyMarkup: finished ? TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(from.Id)) : TelegramUi.ConversationKeyboard(response, adminPolicy.IsAdmin(from.Id)), cancellationToken: cancellationToken);
             }
             else
                 await client.SendMessage(update.Message.Chat.Id, "Команда не распознана. Используйте /help.", cancellationToken: cancellationToken);
@@ -679,12 +782,6 @@ internal sealed class TelegramPollingService(
     private static InlineKeyboardMarkup ReminderTimeKeyboard() => TelegramUi.ReminderTimeKeyboard();
 
     private static InlineKeyboardMarkup CurrencyKeyboard() => TelegramUi.CurrencyKeyboard();
-
-    private static ReplyKeyboardMarkup MainMenuKeyboard() => TelegramUi.MainMenuKeyboard();
-
-    private static ReplyKeyboardMarkup? AddStepKeyboard(string response) => TelegramUi.ConversationKeyboard(response);
-
-    private static ReplyKeyboardMarkup? ConversationKeyboard(string response) => TelegramUi.ConversationKeyboard(response);
 
     private static DateOnly LocalDate(string timeZoneId) => TelegramUi.LocalDate(timeZoneId);
 

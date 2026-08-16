@@ -30,4 +30,13 @@ public static class PaymentDisplayNames
         Domain.PaymentMethod.Other => "другое",
         _ => "не указан"
     };
+
+    public static string PaymentMethodIcon(PaymentMethod method) => method switch
+    {
+        Domain.PaymentMethod.Card => "💳",
+        Domain.PaymentMethod.BankTransfer => "🏦",
+        Domain.PaymentMethod.Cash => "💵",
+        Domain.PaymentMethod.Other => "💰",
+        _ => "💳"
+    };
 }

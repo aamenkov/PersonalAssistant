@@ -21,6 +21,7 @@ services:
       ASPNETCORE_URLS: http://+:8080
       Telegram__BotToken: ${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN}
       Telegram__AllowedUserIds: ${TELEGRAM_ALLOWED_USER_IDS:-}
+      Telegram__AdminUserId: ${TELEGRAM_ADMIN_USER_ID:-}
       ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=personalassistant;Username=personalassistant;Password=${POSTGRES_PASSWORD:-change-me-local-only}
     depends_on:
       postgres:

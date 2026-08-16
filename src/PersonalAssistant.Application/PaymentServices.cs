@@ -14,6 +14,8 @@ public interface IPaymentRepository
     Task<bool> HasTransactionForPeriodAsync(Guid userId, Guid paymentId, string paidPeriod, CancellationToken cancellationToken);
     Task SaveChangesAsync(CancellationToken cancellationToken);
     Task<IReadOnlyList<ReminderCandidate>> GetReminderCandidatesAsync(CancellationToken cancellationToken);
+    Task<int> ClearTransactionHistoryAsync(Guid userId, CancellationToken cancellationToken);
+    Task<int> DeleteAllPaymentsAsync(Guid userId, CancellationToken cancellationToken);
 }
 
 public interface IConversationStateRepository
