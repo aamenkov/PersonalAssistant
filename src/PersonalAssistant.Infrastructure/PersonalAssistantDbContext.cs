@@ -11,6 +11,7 @@ public sealed class PersonalAssistantDbContext(DbContextOptions<PersonalAssistan
     public DbSet<RecurringPayment> RecurringPayments => Set<RecurringPayment>();
     public DbSet<PaymentTransaction> PaymentTransactions => Set<PaymentTransaction>();
     public DbSet<Reminder> Reminders => Set<Reminder>();
+    public DbSet<ReminderSnooze> ReminderSnoozes => Set<ReminderSnooze>();
     public DbSet<ProcessedTelegramUpdate> ProcessedTelegramUpdates => Set<ProcessedTelegramUpdate>();
     public DbSet<ConversationState> ConversationStates => Set<ConversationState>();
 
@@ -55,6 +56,13 @@ public sealed class PersonalAssistantDbContext(DbContextOptions<PersonalAssistan
             entity.HasKey(x => x.Id);
             entity.HasIndex(x => new { x.RecurringPaymentId, x.DueDate, x.LocalDate, x.Kind }).IsUnique();
             entity.HasOne(x => x.RecurringPayment).WithMany(x => x.Reminders).HasForeignKey(x => x.RecurringPaymentId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ReminderSnooze>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.HasIndex(x => new { x.RecurringPaymentId, x.DueDate }).IsUnique();
+            entity.HasOne(x => x.RecurringPayment).WithMany().HasForeignKey(x => x.RecurringPaymentId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<ProcessedTelegramUpdate>(entity =>
@@ -171,6 +179,41 @@ public sealed class ReminderRepository(PersonalAssistantDbContext db) : IReminde
             db.ChangeTracker.Clear();
             return false;
         }
+    }
+
+    public Task<bool> HasActiveSnoozeAsync(Guid paymentId, DateOnly dueDate, DateTime utcNow, CancellationToken cancellationToken) =>
+        db.ReminderSnoozes.AnyAsync(x => x.RecurringPaymentId == paymentId && x.DueDate == dueDate
+            && x.ConsumedAtUtc == null && x.SnoozedUntilUtc > utcNow, cancellationToken);
+
+    public async Task<IReadOnlyList<SnoozedReminderCandidate>> GetDueSnoozesAsync(DateTime utcNow, CancellationToken cancellationToken) =>
+        await db.ReminderSnoozes
+            .AsNoTracking()
+            .Where(x => x.ConsumedAtUtc == null && x.SnoozedUntilUtc <= utcNow
+                && x.RecurringPayment.IsActive && x.RecurringPayment.NextPaymentDate == x.DueDate)
+            .Select(x => new SnoozedReminderCandidate(x.Id, x.RecurringPaymentId, x.RecurringPayment.User.TelegramChatId,
+                x.RecurringPayment.Name, x.RecurringPayment.Amount, x.RecurringPayment.Currency, x.DueDate,
+                x.RecurringPayment.IsAutoDebit, x.DueDate.DayNumber - DateOnly.FromDateTime(utcNow).DayNumber))
+            .ToListAsync(cancellationToken);
+
+    public async Task<bool> TryConsumeSnoozeAsync(Guid snoozeId, DateTime consumedAtUtc, CancellationToken cancellationToken)
+    {
+        var updated = await db.ReminderSnoozes
+            .Where(x => x.Id == snoozeId && x.ConsumedAtUtc == null)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.ConsumedAtUtc, consumedAtUtc), cancellationToken);
+        return updated == 1;
+    }
+
+    public async Task UpsertSnoozeAsync(Guid paymentId, DateOnly dueDate, DateTime snoozedUntilUtc, DateTime createdAtUtc, CancellationToken cancellationToken)
+    {
+        var existing = await db.ReminderSnoozes.SingleOrDefaultAsync(x => x.RecurringPaymentId == paymentId && x.DueDate == dueDate, cancellationToken);
+        if (existing is not null)
+        {
+            db.Remove(existing);
+            await db.SaveChangesAsync(cancellationToken);
+        }
+
+        await db.ReminderSnoozes.AddAsync(ReminderSnooze.Create(paymentId, dueDate, snoozedUntilUtc, createdAtUtc), cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
     }
 }
 

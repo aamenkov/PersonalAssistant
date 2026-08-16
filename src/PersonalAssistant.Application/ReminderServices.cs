@@ -29,6 +29,10 @@ public sealed record ReminderNotification(
 public interface IReminderRepository
 {
     Task<bool> TryClaimAsync(Guid paymentId, DateOnly dueDate, DateOnly localDate, ReminderKind kind, DateTime claimedAtUtc, CancellationToken cancellationToken);
+    Task<bool> HasActiveSnoozeAsync(Guid paymentId, DateOnly dueDate, DateTime utcNow, CancellationToken cancellationToken);
+    Task UpsertSnoozeAsync(Guid paymentId, DateOnly dueDate, DateTime snoozedUntilUtc, DateTime createdAtUtc, CancellationToken cancellationToken);
+    Task<IReadOnlyList<SnoozedReminderCandidate>> GetDueSnoozesAsync(DateTime utcNow, CancellationToken cancellationToken);
+    Task<bool> TryConsumeSnoozeAsync(Guid snoozeId, DateTime consumedAtUtc, CancellationToken cancellationToken);
 }
 
 public sealed class ReminderService(
@@ -68,11 +72,23 @@ public sealed class ReminderService(
             if (!kind.HasValue)
                 continue;
 
+            if (await reminders.HasActiveSnoozeAsync(candidate.PaymentId, candidate.DueDate, utcNow, cancellationToken))
+                continue;
+
             if (!await reminders.TryClaimAsync(candidate.PaymentId, candidate.DueDate, localDate, kind.Value, utcNow, cancellationToken))
                 continue;
 
             result.Add(new ReminderNotification(candidate.PaymentId, candidate.ChatId, candidate.Name, candidate.Amount,
                 candidate.Currency, candidate.DueDate, kind.Value, daysUntilDue, candidate.IsAutoDebit));
+        }
+
+        foreach (var snooze in await reminders.GetDueSnoozesAsync(utcNow, cancellationToken))
+        {
+            if (!await reminders.TryConsumeSnoozeAsync(snooze.SnoozeId, utcNow, cancellationToken))
+                continue;
+
+            result.Add(new ReminderNotification(snooze.PaymentId, snooze.ChatId, snooze.Name, snooze.Amount,
+                snooze.Currency, snooze.DueDate, ReminderKind.Snoozed, snooze.DaysUntilDue, snooze.IsAutoDebit));
         }
 
         return result;
