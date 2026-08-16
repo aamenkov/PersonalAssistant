@@ -400,7 +400,7 @@ internal sealed class TelegramPollingService(
             var response = await editor.BeginFieldAsync(user.Id, paymentId, parts[1], LocalDate(user.TimeZoneId), cancellationToken);
             await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
             if (update.CallbackQuery.Message is { } message)
-                    await client.SendMessage(message.Chat.Id, response, replyMarkup: TelegramUi.ConversationKeyboard(response, adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
+                await client.SendMessage(message.Chat.Id, response, replyMarkup: TelegramUi.ConversationKeyboard(response, adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
             return;
         }
 

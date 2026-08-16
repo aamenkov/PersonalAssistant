@@ -93,6 +93,52 @@ public sealed class PrelaunchAuditTests
     }
 
     [Fact]
+    public async Task PaymentCreation_OffersSimpleMonthlyDayChoicesAndAcceptsCustomDate()
+    {
+        var userId = Guid.NewGuid();
+        var states = new InMemoryConversationStateRepository();
+        var payments = new InMemoryPaymentRepository();
+        var service = new PaymentConversationService(states, new PaymentService(payments));
+
+        await service.BeginAsync(userId, "RUB", new DateOnly(2026, 8, 14), CancellationToken.None);
+        await service.HandleInputAsync(userId, "МТС Телефон", CancellationToken.None);
+        await service.HandleInputAsync(userId, "1092", CancellationToken.None);
+        await service.HandleInputAsync(userId, "Каждый месяц", CancellationToken.None);
+        var customDatePrompt = await service.HandleInputAsync(userId, "Произвольная дата", CancellationToken.None);
+        var confirmation = await service.HandleInputAsync(userId, "20.09.2026", CancellationToken.None);
+
+        Assert.Contains("Укажите дату платежа", customDatePrompt);
+        Assert.Contains("💳 МТС Телефон", confirmation);
+        Assert.Contains("📅 Следующий платеж: 20.09.2026", confirmation);
+        Assert.Contains("✅ Проверьте платеж", confirmation);
+    }
+
+    [Fact]
+    public async Task PaymentEditConversation_UsesMonthlyDayChoicesAndCustomDate()
+    {
+        var userId = Guid.NewGuid();
+        var payment = RecurringPayment.Create(userId, "МТС Телефон", 1092, "RUB", 1, RecurrenceUnit.Month,
+            new DateOnly(2026, 8, 15), DateTime.UtcNow);
+        var payments = new InMemoryPaymentRepository();
+        payments.Items.Add(payment);
+        var states = new InMemoryConversationStateRepository();
+        var service = new PaymentEditConversationService(states, new PaymentService(payments));
+
+        var schedulePrompt = await service.BeginFieldAsync(userId, payment.Id, "schedule", new DateOnly(2026, 8, 14), CancellationToken.None);
+        var customDatePrompt = await service.HandleInputAsync(userId, "Каждый месяц", CancellationToken.None);
+        var datePrompt = await service.HandleInputAsync(userId, "Произвольная дата", CancellationToken.None);
+        var result = await service.HandleInputAsync(userId, "20.09.2026", CancellationToken.None);
+
+        Assert.Contains("Как часто нужно платить", schedulePrompt);
+        Assert.Contains("Выберите день месяца", customDatePrompt);
+        Assert.Contains("Укажите дату платежа", datePrompt);
+        Assert.Contains("обновлен", result);
+        Assert.Equal(new DateOnly(2026, 9, 20), payment.NextPaymentDate);
+        Assert.Equal(20, payment.ScheduleDayOfMonth);
+        Assert.False(payment.IsLastDayOfMonth);
+    }
+
+    [Fact]
     public async Task PaymentRecordConversation_AcceptsButtonsForDefaultsAndSavesPayment()
     {
         var userId = Guid.NewGuid();
