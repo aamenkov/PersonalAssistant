@@ -98,5 +98,7 @@ public sealed class MonthlyStatisticsTests
         public Task SaveChangesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<IReadOnlyList<ReminderCandidate>> GetReminderCandidatesAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<ReminderCandidate>>([]);
         public Task<bool> HasTransactionForPeriodAsync(Guid userId, Guid paymentId, string paidPeriod, CancellationToken cancellationToken) => Task.FromResult(false);
+        public Task<int> ClearTransactionHistoryAsync(Guid userId, CancellationToken cancellationToken) => Task.FromResult(0);
+        public Task<int> DeleteAllPaymentsAsync(Guid userId, CancellationToken cancellationToken) => Task.FromResult(0);
     }
 }

@@ -163,6 +163,9 @@ public sealed class PaymentServiceTests
 
         public Task<bool> HasTransactionForPeriodAsync(Guid userId, Guid paymentId, string paidPeriod, CancellationToken cancellationToken) =>
             Task.FromResult(PersistedPeriods.Contains((paymentId, paidPeriod)));
+
+        public Task<int> ClearTransactionHistoryAsync(Guid userId, CancellationToken cancellationToken) => Task.FromResult(0);
+        public Task<int> DeleteAllPaymentsAsync(Guid userId, CancellationToken cancellationToken) => Task.FromResult(0);
     }
 
     private sealed class InMemoryReminderRepository : IReminderRepository
