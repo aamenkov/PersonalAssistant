@@ -27,6 +27,7 @@ builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddScoped<IReminderRepository, ReminderRepository>();
 builder.Services.AddScoped<ITelegramUpdateStore, TelegramUpdateStore>();
 builder.Services.AddScoped<ReminderService>();
+builder.Services.AddScoped<ReminderSnoozeService>();
 builder.Services.AddScoped<IConversationStateRepository, ConversationStateRepository>();
 builder.Services.AddScoped<PaymentService>();
 builder.Services.AddScoped<PaymentConversationService>();
@@ -133,6 +134,60 @@ internal sealed class TelegramPollingService(
 
     private async Task HandleUpdateCoreAsync(ITelegramBotClient client, Update update, CancellationToken cancellationToken)
     {
+        if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery?.Data is { } snoozeData
+            && snoozeData.StartsWith(TelegramCallbackData.ReminderPrefix + "snooze:", StringComparison.Ordinal))
+        {
+            var parts = snoozeData.Split(':');
+            if (parts.Length is < 3 or > 4 || !Guid.TryParse(parts[2], out var snoozePaymentId))
+            {
+                await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Некорректное напоминание", showAlert: true, cancellationToken: cancellationToken);
+                return;
+            }
+
+            using var snoozeScope = scopeFactory.CreateScope();
+            var snoozeUser = await snoozeScope.ServiceProvider.GetRequiredService<IUserRepository>()
+                .FindByTelegramUserIdAsync(update.CallbackQuery.From.Id, cancellationToken);
+            if (snoozeUser is null)
+            {
+                await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Сначала выполните /start", showAlert: true, cancellationToken: cancellationToken);
+                return;
+            }
+
+            if (parts.Length == 3)
+            {
+                await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
+                if (update.CallbackQuery.Message is { } snoozeMessage)
+                    await client.SendMessage(snoozeMessage.Chat.Id, "Когда напомнить еще раз?",
+                        replyMarkup: TelegramUi.ReminderSnoozeKeyboard(snoozePaymentId), cancellationToken: cancellationToken);
+                return;
+            }
+
+            var option = parts[3].ToLowerInvariant() switch
+            {
+                "hour" => ReminderSnoozeOption.InOneHour,
+                "evening" => ReminderSnoozeOption.ThisEvening,
+                "tomorrow" => ReminderSnoozeOption.Tomorrow,
+                _ => (ReminderSnoozeOption?)null
+            };
+            if (!option.HasValue)
+            {
+                await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Некорректный вариант", showAlert: true, cancellationToken: cancellationToken);
+                return;
+            }
+
+            var snoozeResult = await snoozeScope.ServiceProvider.GetRequiredService<ReminderSnoozeService>()
+                .SnoozeAsync(snoozeUser, snoozePaymentId, option.Value, DateTime.UtcNow, cancellationToken);
+            await client.AnswerCallbackQuery(update.CallbackQuery.Id,
+                snoozeResult.Succeeded ? "Напоминание отложено" : "Платеж уже недоступен", cancellationToken: cancellationToken);
+            if (snoozeResult.Succeeded && update.CallbackQuery.Message is { } resultMessage)
+            {
+                var timeZone = TimeZoneInfo.FindSystemTimeZoneById(snoozeUser.TimeZoneId);
+                var localUntil = TimeZoneInfo.ConvertTimeFromUtc(snoozeResult.SnoozedUntilUtc, timeZone);
+                await client.SendMessage(resultMessage.Chat.Id, $"⏰ Хорошо, напомню {localUntil:dd.MM.yyyy в HH\\:mm}.",
+                    replyMarkup: TelegramUi.MainMenuKeyboard(), cancellationToken: cancellationToken);
+            }
+            return;
+        }
 
         if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery?.Data is { } paymentCallback && paymentCallback.StartsWith(TelegramCallbackData.PaymentPrefix, StringComparison.Ordinal))
         {

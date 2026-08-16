@@ -254,6 +254,29 @@ public sealed class Reminder
     public DateTime SentAtUtc { get; private set; }
 }
 
+public sealed class ReminderSnooze
+{
+    private ReminderSnooze() { }
+
+    public static ReminderSnooze Create(Guid recurringPaymentId, DateOnly dueDate, DateTime snoozedUntilUtc, DateTime createdAtUtc) => new()
+    {
+        RecurringPaymentId = recurringPaymentId,
+        DueDate = dueDate,
+        SnoozedUntilUtc = snoozedUntilUtc,
+        CreatedAtUtc = createdAtUtc
+    };
+
+    public Guid Id { get; private set; } = Guid.NewGuid();
+    public Guid RecurringPaymentId { get; private set; }
+    public RecurringPayment RecurringPayment { get; private set; } = null!;
+    public DateOnly DueDate { get; private set; }
+    public DateTime SnoozedUntilUtc { get; private set; }
+    public DateTime CreatedAtUtc { get; private set; }
+    public DateTime? ConsumedAtUtc { get; private set; }
+
+    public void Consume(DateTime consumedAtUtc) => ConsumedAtUtc = consumedAtUtc;
+}
+
 public sealed class ConversationState
 {
     private ConversationState() { }

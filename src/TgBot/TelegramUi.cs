@@ -33,6 +33,13 @@ internal static class TelegramUi
         new[] { InlineKeyboardButton.WithCallbackData("18:00", TelegramCallbackData.Setting("time", "18:00")) }
     });
 
+    public static InlineKeyboardMarkup ReminderSnoozeKeyboard(Guid paymentId) => new(new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("Через час", TelegramCallbackData.ReminderSnooze(paymentId, "hour")) },
+        new[] { InlineKeyboardButton.WithCallbackData("Сегодня вечером", TelegramCallbackData.ReminderSnooze(paymentId, "evening")) },
+        new[] { InlineKeyboardButton.WithCallbackData("Завтра", TelegramCallbackData.ReminderSnooze(paymentId, "tomorrow")) }
+    });
+
     public static InlineKeyboardMarkup CurrencyKeyboard() => new(new[]
     {
         new[] { InlineKeyboardButton.WithCallbackData("Российский рубль (RUB)", TelegramCallbackData.Setting("currency", "RUB")) },

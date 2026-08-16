@@ -26,7 +26,8 @@ internal sealed class ReminderBackgroundService(
                         await bot.SendMessage(notification.ChatId, Format(notification),
                             replyMarkup: new InlineKeyboardMarkup(new[]
                             {
-                                new[] { InlineKeyboardButton.WithCallbackData("✅ Оплатил", TelegramCallbackData.Payment("pay", notification.PaymentId)) }
+                                new[] { InlineKeyboardButton.WithCallbackData("✅ Оплатил", TelegramCallbackData.Payment("pay", notification.PaymentId)) },
+                                new[] { InlineKeyboardButton.WithCallbackData("⏰ Напомнить позже", TelegramCallbackData.ReminderSnooze(notification.PaymentId)) }
                             }), cancellationToken: stoppingToken);
                     }
                     catch (RequestException exception)
@@ -51,6 +52,8 @@ internal sealed class ReminderBackgroundService(
     private static string Format(ReminderNotification notification)
     {
         var amount = TelegramPresentation.Money(notification.Amount, notification.Currency);
+        if (notification.Kind == ReminderKind.Snoozed)
+            return $"⏰ Напоминание\n\n{notification.Name}\n{amount}\n\nПора проверить и оплатить платеж.";
         if (notification.Kind == ReminderKind.Overdue)
         {
             return $"⚠️ Платеж просрочен\n\n{notification.Name}\n{amount}\n\nСрок оплаты был {TelegramPresentation.RelativeDays(notification.DaysUntilDue)}.";

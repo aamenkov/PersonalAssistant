@@ -20,7 +20,8 @@ public enum ReminderKind
 {
     BeforeDue = 0,
     DueToday = 1,
-    Overdue = 2
+    Overdue = 2,
+    Snoozed = 3
 }
 
 public enum ConversationKind

@@ -171,5 +171,17 @@ public sealed class PaymentServiceTests
 
         public Task<bool> TryClaimAsync(Guid paymentId, DateOnly dueDate, DateOnly localDate, ReminderKind kind, DateTime claimedAtUtc, CancellationToken cancellationToken) =>
             Task.FromResult(claims.Add((paymentId, dueDate, localDate, kind)));
+
+        public Task<bool> HasActiveSnoozeAsync(Guid paymentId, DateOnly dueDate, DateTime utcNow, CancellationToken cancellationToken) =>
+            Task.FromResult(false);
+
+        public Task UpsertSnoozeAsync(Guid paymentId, DateOnly dueDate, DateTime snoozedUntilUtc, DateTime createdAtUtc, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<IReadOnlyList<SnoozedReminderCandidate>> GetDueSnoozesAsync(DateTime utcNow, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<SnoozedReminderCandidate>>([]);
+
+        public Task<bool> TryConsumeSnoozeAsync(Guid snoozeId, DateTime consumedAtUtc, CancellationToken cancellationToken) =>
+            Task.FromResult(false);
     }
 }
