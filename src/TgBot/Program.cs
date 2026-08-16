@@ -755,7 +755,7 @@ internal sealed class TelegramPollingService(
         }
         else if (command == "/help")
         {
-            await client.SendMessage(update.Message.Chat.Id, "Доступные команды:\n/start — регистрация и выбор часового пояса\n/settings — изменить часовой пояс\n/add — добавить платеж\n/payments — все активные платежи\n/upcoming — платежи на ближайшие 7 дней\n/edit — изменить платеж\n/disable — отключить платеж\n/pay — отметить оплату\n/history [YYYY-MM] — история оплат\n/stats [YYYY-MM] — статистика месяца\n/help — справка", cancellationToken: cancellationToken);
+            await client.SendMessage(update.Message.Chat.Id, "Доступные команды:\n/start — начало работы\n/settings — настройки\n/add — добавить платеж\n/payments — все активные платежи\n/upcoming — платежи на ближайшие 7 дней\n/edit — изменить платеж\n/disable — отключить платеж\n/pay — отметить оплату\n/history [YYYY-MM] — история оплат\n/stats [YYYY-MM] — статистика месяца\n/help — справка", cancellationToken: cancellationToken);
         }
         else
         {
