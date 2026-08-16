@@ -90,7 +90,7 @@ internal static class TelegramUi
         $"Следующий платеж: {TelegramPresentation.Date(payment.DueDate, today, true)}";
 
     public static string FormatUpcomingCard(UpcomingPaymentItem payment, DateOnly today) =>
-        $"{(payment.IsOverdue ? "⚠️" : "💳")} {payment.Name}\n\n" +
+        $"{(payment.IsOverdue ? "⚠️" : PaymentDisplayNames.PaymentMethodIcon(payment.PaymentMethod))} {payment.Name}\n\n" +
         $"{TelegramPresentation.Money(payment.Amount, payment.Currency)}\n" +
         (payment.IsOverdue
             ? $"Срок был {TelegramPresentation.Date(payment.DueDate, today)}"

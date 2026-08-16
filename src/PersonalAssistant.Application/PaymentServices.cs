@@ -68,6 +68,7 @@ public sealed record UpcomingPaymentItem(
     string Currency,
     DateOnly DueDate,
     RecurrenceUnit RecurrenceUnit,
+    PaymentMethod PaymentMethod,
     bool IsOverdue,
     int DaysFromToday);
 
@@ -165,6 +166,7 @@ public sealed class PaymentService(IPaymentRepository payments)
                 x.Currency,
                 x.NextPaymentDate!.Value,
                 x.RecurrenceUnit,
+                x.PaymentMethod,
                 x.NextPaymentDate.Value < today,
                 x.NextPaymentDate.Value.DayNumber - today.DayNumber))
             .OrderBy(x => x.DueDate)
