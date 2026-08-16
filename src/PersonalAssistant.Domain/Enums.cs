@@ -29,5 +29,6 @@ public enum ConversationKind
     None = 0,
     AddPayment = 1,
     EditPayment = 2,
-    RecordPayment = 3
+    RecordPayment = 3,
+    TimeZone = 4
 }

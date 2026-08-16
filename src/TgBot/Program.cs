@@ -9,6 +9,7 @@ using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 using Telegram.Bot.Exceptions;
 using PersonalAssistant.Application;
+using PersonalAssistant.Domain;
 using PersonalAssistant.Infrastructure;
 using PersonalAssistant.Bot;
 
@@ -22,6 +23,7 @@ builder.Services.AddPersonalAssistantInfrastructure(builder.Configuration);
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<UserRegistrationService>();
 builder.Services.AddScoped<UserTimeZoneService>();
+builder.Services.AddScoped<TimeZoneConversationService>();
 builder.Services.AddScoped<UserSettingsService>();
 builder.Services.AddScoped<AdminService>();
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
@@ -272,7 +274,7 @@ internal sealed class TelegramPollingService(
                 snoozeResult.Succeeded ? "Напоминание отложено" : "Платеж уже недоступен", cancellationToken: cancellationToken);
             if (snoozeResult.Succeeded && update.CallbackQuery.Message is { } resultMessage)
             {
-                var timeZone = TimeZoneInfo.FindSystemTimeZoneById(snoozeUser.TimeZoneId);
+                var timeZone = TimeZoneResolver.Resolve(snoozeUser.TimeZoneId);
                 var localUntil = TimeZoneInfo.ConvertTimeFromUtc(snoozeResult.SnoozedUntilUtc, timeZone);
                 await client.SendMessage(resultMessage.Chat.Id, $"⏰ Хорошо, напомню {localUntil:dd.MM.yyyy в HH\\:mm}.",
                     replyMarkup: TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
@@ -447,6 +449,24 @@ internal sealed class TelegramPollingService(
         {
             var timeZoneId = callbackData[TelegramCallbackData.TimeZonePrefix.Length..];
             using var scope = scopeFactory.CreateScope();
+            if (timeZoneId == "custom")
+            {
+                var user = await scope.ServiceProvider.GetRequiredService<IUserRepository>()
+                    .FindByTelegramUserIdAsync(update.CallbackQuery.From.Id, cancellationToken);
+                if (user is null)
+                {
+                    await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Сначала выполните /start", showAlert: true, cancellationToken: cancellationToken);
+                    return;
+                }
+
+                var response = await scope.ServiceProvider.GetRequiredService<TimeZoneConversationService>()
+                    .BeginAsync(update.CallbackQuery.From.Id, cancellationToken);
+                await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
+                if (update.CallbackQuery.Message is { } customMessage)
+                    await client.SendMessage(customMessage.Chat.Id, response, replyMarkup: TelegramUi.ConversationKeyboard(response, adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
+                return;
+            }
+
             var timeZones = scope.ServiceProvider.GetRequiredService<UserTimeZoneService>();
             try
             {
@@ -735,7 +755,7 @@ internal sealed class TelegramPollingService(
         }
         else if (command == "/help")
         {
-            await client.SendMessage(update.Message.Chat.Id, "Доступные команды:\n/start — регистрация и выбор часового пояса\n/settings — изменить часовой пояс\n/add — добавить платеж\n/payments — все активные платежи\n/upcoming — платежи на ближайшие 7 дней\n/edit — изменить платеж\n/disable — отключить платеж\n/pay — отметить оплату\n/history [YYYY-MM] — история оплат\n/stats [YYYY-MM] — статистика месяца\n/help — справка", cancellationToken: cancellationToken);
+            await client.SendMessage(update.Message.Chat.Id, "Доступные команды:\n/start — начало работы\n/settings — настройки\n/add — добавить платеж\n/payments — все активные платежи\n/upcoming — платежи на ближайшие 7 дней\n/edit — изменить платеж\n/disable — отключить платеж\n/pay — отметить оплату\n/history [YYYY-MM] — история оплат\n/stats [YYYY-MM] — статистика месяца\n/help — справка", cancellationToken: cancellationToken);
         }
         else
         {
@@ -748,7 +768,8 @@ internal sealed class TelegramPollingService(
                 return;
             }
 
-            var response = await scope.ServiceProvider.GetRequiredService<PaymentConversationService>().HandleInputAsync(user.Id, text, cancellationToken)
+            var response = await scope.ServiceProvider.GetRequiredService<TimeZoneConversationService>().HandleInputAsync(from.Id, text, DateTime.UtcNow, cancellationToken)
+                ?? await scope.ServiceProvider.GetRequiredService<PaymentConversationService>().HandleInputAsync(user.Id, text, cancellationToken)
                 ?? await scope.ServiceProvider.GetRequiredService<PaymentEditConversationService>().HandleInputAsync(user.Id, text, cancellationToken)
                 ?? await scope.ServiceProvider.GetRequiredService<PaymentRecordConversationService>().HandleInputAsync(user.Id, text, cancellationToken);
             if (response is not null)

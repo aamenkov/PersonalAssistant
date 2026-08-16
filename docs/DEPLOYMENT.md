@@ -78,7 +78,7 @@ docker compose logs -f tgbot
 
 1. Проверьте в логах сообщения `Database migrations applied` и `PersonalAssistant polling started`.
 2. Проверьте health endpoint: `curl http://localhost:8080/health` должен вернуть JSON со статусом `ok`.
-3. Выполните `/start` и выберите часовой пояс.
+3. Выполните `/start` и выберите часовой пояс. Для российского региона можно нажать «Указать текущее время», ввести местное время `ЧЧ:ММ` и подтвердить найденное смещение.
 4. Создайте тестовый платеж через `/add`.
 5. Проверьте `/payments`, `/upcoming`, `/edit` и `/pay`.
 6. Проверьте `/history` и `/stats`.
