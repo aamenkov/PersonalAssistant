@@ -96,7 +96,12 @@ internal static class TelegramUi
         $"{TelegramPresentation.Money(payment.Amount, payment.Currency)}\n" +
         (payment.IsOverdue
             ? $"Срок был {TelegramPresentation.Date(payment.DueDate, today)}"
-            : $"{TelegramPresentation.Date(payment.DueDate, today, true)} · {TelegramPresentation.RelativeDays(payment.DaysFromToday)}");
+            : payment.DaysFromToday switch
+            {
+                0 => "сегодня",
+                1 => "завтра",
+                _ => $"{TelegramPresentation.Date(payment.DueDate, today, true)} · {TelegramPresentation.RelativeDays(payment.DaysFromToday)}"
+            });
 
     public static string FormatUpcoming(IReadOnlyList<UpcomingPaymentItem> payments, DateOnly today, int windowDays)
     {
