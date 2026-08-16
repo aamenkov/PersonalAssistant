@@ -9,3 +9,6 @@ appsettings.*.json
 *.db
 *.log
 .env
+backups/
+*.dump
+*.sql.gz

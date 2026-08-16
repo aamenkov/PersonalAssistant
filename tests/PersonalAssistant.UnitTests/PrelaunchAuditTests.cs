@@ -213,6 +213,27 @@ public sealed class PrelaunchAuditTests
         Assert.Null(states.State);
     }
 
+    [Fact]
+    public async Task PaymentEditConversation_UpdatesScheduleDayWhenRecurrenceChanges()
+    {
+        var userId = Guid.NewGuid();
+        var payment = RecurringPayment.Create(userId, "Rent", 50000, "RUB", 1, RecurrenceUnit.Month,
+            new DateOnly(2026, 8, 31), DateTime.UtcNow, 31, true);
+        var paymentRepository = new InMemoryPaymentRepository();
+        paymentRepository.Items.Add(payment);
+        var states = new InMemoryConversationStateRepository();
+        var service = new PaymentEditConversationService(states, new PaymentService(paymentRepository));
+
+        await service.BeginFieldAsync(userId, payment.Id, "schedule", new DateOnly(2026, 8, 14), CancellationToken.None);
+        await service.HandleInputAsync(userId, "Каждый год", CancellationToken.None);
+        await service.HandleInputAsync(userId, "15.09.2026", CancellationToken.None);
+
+        Assert.Equal(RecurrenceUnit.Year, payment.RecurrenceUnit);
+        Assert.Equal(new DateOnly(2026, 9, 15), payment.NextPaymentDate);
+        Assert.Equal(15, payment.ScheduleDayOfMonth);
+        Assert.False(payment.IsLastDayOfMonth);
+    }
+
     private sealed class InMemoryConversationStateRepository(ConversationState? state = null) : IConversationStateRepository
     {
         public ConversationState? State { get; private set; } = state;

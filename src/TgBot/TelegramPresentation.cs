@@ -40,6 +40,8 @@ internal static class TelegramPresentation
         _ => $"{Math.Abs(days)} {RussianDays(Math.Abs(days))} назад"
     };
 
+    public static string DaysCount(int days) => $"{days} {RussianDays(days)}";
+
     private static string RussianDays(int days) => days % 10 == 1 && days % 100 != 11
         ? "день"
         : days % 10 is >= 2 and <= 4 && (days % 100 < 10 || days % 100 >= 20)

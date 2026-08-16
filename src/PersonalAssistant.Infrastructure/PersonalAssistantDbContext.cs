@@ -155,15 +155,19 @@ public sealed class PaymentRepository(PersonalAssistantDbContext db) : IPaymentR
 
     public async Task<int> DeleteAllPaymentsAsync(Guid userId, CancellationToken cancellationToken)
     {
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+
         // Transactions use Restrict because ordinary payment edits must never
         // remove history. Delete them explicitly before deleting payments.
         await db.PaymentTransactions
             .Where(x => x.RecurringPayment.UserId == userId)
             .ExecuteDeleteAsync(cancellationToken);
 
-        return await db.RecurringPayments
+        var deletedPayments = await db.RecurringPayments
             .Where(x => x.UserId == userId)
             .ExecuteDeleteAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return deletedPayments;
     }
 
     public async Task SaveChangesAsync(CancellationToken cancellationToken)

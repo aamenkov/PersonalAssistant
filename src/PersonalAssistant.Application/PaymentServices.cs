@@ -743,11 +743,8 @@ public sealed class PaymentEditConversationService(
                 if (fieldDate < draft.Today)
                     return $"Дата не может быть в прошлом. Укажите дату начиная с {draft.Today:dd.MM.yyyy}:";
                 draft.NextPaymentDate = fieldDate;
-                if (draft.RecurrenceUnit == RecurrenceUnit.Month)
-                {
-                    draft.ScheduleDayOfMonth = fieldDate.Day;
-                    draft.IsLastDayOfMonth = false;
-                }
+                draft.ScheduleDayOfMonth = fieldDate.Day;
+                draft.IsLastDayOfMonth = false;
                 return await SaveFieldAsync(userId, state, draft, cancellationToken);
             case PaymentEditStep.FieldScheduleRecurrence:
                 if (!TryParseRecurrence(input, out var fieldRecurrence))

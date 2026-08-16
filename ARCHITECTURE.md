@@ -17,10 +17,96 @@ flowchart LR
 
 - `Domain`: `User`, `RecurringPayment`, `PaymentTransaction`, `Reminder`, `ConversationState`, перечисления и расчет следующей даты.
 - `Application`: сценарии, DTO, валидация и интерфейсы хранилищ.
-- `Infrastructure`: `DbContext`, PostgreSQL, миграции, Telegram-клиент, фоновые сервисы и UTC/time-zone адаптеры.
-- `Bot`: конфигурация host и DI, polling Telegram, тонкая маршрутизация команд/callback-ов и адаптация ответов application-слоя.
+- `Infrastructure`: `DbContext`, PostgreSQL, миграции, репозитории и хранилище обработанных Telegram Update.
+- `Bot`: конфигурация host и DI, Telegram-клиент, polling, фоновые отправители, тонкая маршрутизация команд/callback-ов и адаптация ответов application-слоя.
 
 Регистрация и настройка профиля реализованы через `UserRegistrationService` и `UserTimeZoneService`; Telegram-обработчик только переводит Update в вызов application-сервиса.
+
+## Карта ключевых классов
+
+Диаграмма показывает основные runtime-связи. DTO, перечисления и EF-конфигурации намеренно не включены: они описаны в соответствующих проектах и не являются самостоятельными координаторами сценариев.
+
+```mermaid
+classDiagram
+    class TelegramPollingService
+    class TelegramUi
+    class TelegramCallbackData
+    class ReminderBackgroundService
+    class BotAccessPolicy
+
+    class PaymentService
+    class PaymentConversationService
+    class PaymentEditConversationService
+    class PaymentRecordConversationService
+    class ReminderService
+    class ReminderSnoozeService
+    class UserRegistrationService
+    class UserSettingsService
+    class TimeZoneConversationService
+    class AdminService
+    class UserUpdateGate
+
+    class PaymentDateCalculator
+    class TimeZoneResolver
+    class User
+    class RecurringPayment
+    class PaymentTransaction
+    class Reminder
+    class ConversationState
+
+    class PersonalAssistantDbContext
+    class UserRepository
+    class PaymentRepository
+    class ReminderRepository
+    class ConversationStateRepository
+    class TelegramUpdateStore
+
+    TelegramPollingService --> TelegramUi
+    TelegramPollingService --> TelegramCallbackData
+    TelegramPollingService --> PaymentService
+    TelegramPollingService --> PaymentConversationService
+    TelegramPollingService --> PaymentEditConversationService
+    TelegramPollingService --> PaymentRecordConversationService
+    TelegramPollingService --> UserRegistrationService
+    TelegramPollingService --> UserSettingsService
+    TelegramPollingService --> TimeZoneConversationService
+    TelegramPollingService --> AdminService
+    TelegramPollingService --> BotAccessPolicy
+    TelegramPollingService --> UserUpdateGate
+
+    ReminderBackgroundService --> ReminderService
+    ReminderBackgroundService --> ReminderSnoozeService
+
+    PaymentConversationService --> PaymentService
+    PaymentEditConversationService --> PaymentService
+    PaymentRecordConversationService --> PaymentService
+    PaymentService --> PaymentDateCalculator
+    ReminderService --> PaymentDateCalculator
+    TimeZoneConversationService --> TimeZoneResolver
+
+    UserRegistrationService --> UserRepository
+    UserSettingsService --> UserRepository
+    PaymentService --> PaymentRepository
+    ReminderService --> ReminderRepository
+    ReminderSnoozeService --> ReminderRepository
+    PaymentConversationService --> ConversationStateRepository
+    PaymentEditConversationService --> ConversationStateRepository
+    PaymentRecordConversationService --> ConversationStateRepository
+    TelegramPollingService --> TelegramUpdateStore
+
+    PaymentRepository --> PersonalAssistantDbContext
+    UserRepository --> PersonalAssistantDbContext
+    ReminderRepository --> PersonalAssistantDbContext
+    ConversationStateRepository --> PersonalAssistantDbContext
+    TelegramUpdateStore --> PersonalAssistantDbContext
+
+    User "1" --> "many" RecurringPayment
+    RecurringPayment "1" --> "many" PaymentTransaction
+    RecurringPayment "1" --> "many" Reminder
+    User "1" --> "1" ConversationState
+```
+
+Граница ответственности остается простой: `TelegramPollingService` маршрутизирует события, application-сервисы выполняют сценарии, домен считает даты и хранит правила, а Infrastructure предоставляет PostgreSQL-реализации интерфейсов. Новые классы следует добавлять только при появлении отдельной ответственности, а не для дробления существующего кода.
 
 В Telegram-проекте `Program.cs` содержит запуск web host, регистрацию зависимостей и текущую orchestration-логику polling-сервиса. `BotAccessPolicy` отвечает за ограничение доступа. `TelegramUi` содержит клавиатуры, отображение платежей, истории и статистики, преобразование команд и локальную дату. `TelegramCallbackData` централизует префиксы и построение callback-значений. Это не переносит бизнес-правила в Bot: компоненты UI только преобразуют данные в формат Telegram. Небольшой health endpoint размещен в том же host, чтобы Docker/VPS могли проверить доступность приложения и PostgreSQL.
 
@@ -80,7 +166,11 @@ Telegram UI разделяет глобальную навигацию и кон
 
 Доменная логика тестируется unit-тестами без БД и Telegram. Интеграционные тесты проверяют PostgreSQL и изоляцию владельцев.
 
-## Известные ограничения MVP
+## Эксплуатация
+
+Docker Compose требует явные `TELEGRAM_BOT_TOKEN` и `POSTGRES_PASSWORD`, автоматически перезапускает контейнеры и публикует health endpoint только на loopback-интерфейсе VPS. Полное административное удаление платежей и истории выполняется в одной транзакции. Ручные backup и восстановление описаны в `docs/BACKUP.md`; автоматизация вынесена в будущую техническую задачу TD-010.
+
+## Известные ограничения MVP 2
 
 Конвертация валют, банковские интеграции, веб-интерфейс, семейный доступ и автоматическое подтверждение списаний пока не реализуются. Полный рефакторинг TelegramPollingService отложен: текущая структура уже разделяет UI, application-сценарии и инфраструктуру, а дополнительная декомпозиция не нужна до появления реальной проблемы сопровождения.
 
