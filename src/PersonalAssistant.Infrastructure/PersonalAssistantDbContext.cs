@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using PersonalAssistant.Application;
 using PersonalAssistant.Domain;
 
@@ -33,6 +34,8 @@ public sealed class PersonalAssistantDbContext(DbContextOptions<PersonalAssistan
         modelBuilder.Entity<RecurringPayment>(entity =>
         {
             entity.HasKey(x => x.Id);
+            entity.Property(x => x.NextPaymentDate).IsConcurrencyToken();
+            entity.Property(x => x.IsActive).IsConcurrencyToken();
             entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
             entity.Property(x => x.Amount).HasPrecision(18, 2);
             entity.Property(x => x.Currency).HasMaxLength(3).IsRequired();
@@ -108,6 +111,23 @@ public sealed class PersonalAssistantDbContext(DbContextOptions<PersonalAssistan
 
 public sealed class UserRepository(PersonalAssistantDbContext db) : IUserRepository
 {
+    public async Task<bool> TrySetReminderProfileAsync(long telegramUserId, ReminderProfile original, ReminderProfile profile,
+        DateTime utcNow, CancellationToken cancellationToken)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT 1 FROM \"Users\" WHERE \"TelegramUserId\" = {telegramUserId} FOR UPDATE", cancellationToken);
+        var user = await FindByTelegramUserIdAsync(telegramUserId, cancellationToken);
+        if (user is null)
+            return false;
+        await db.Entry(user).ReloadAsync(cancellationToken);
+        if (user.GetReminderProfile() != original)
+            return false;
+        user.SetReminderProfile(profile, utcNow);
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
     public Task<User?> FindByTelegramUserIdAsync(long telegramUserId, CancellationToken cancellationToken) =>
         db.Users.SingleOrDefaultAsync(x => x.TelegramUserId == telegramUserId, cancellationToken);
 
@@ -129,6 +149,39 @@ public sealed class PaymentRepository(PersonalAssistantDbContext db) : IPaymentR
     public Task<RecurringPayment?> FindPaymentWithReminderSettingsAsync(Guid userId, Guid paymentId, CancellationToken cancellationToken) =>
         db.RecurringPayments.Include(x => x.User).Include(x => x.ReminderSettings)
             .SingleOrDefaultAsync(x => x.UserId == userId && x.Id == paymentId, cancellationToken);
+
+    public async Task<IReadOnlyList<ReminderPreviewPayment>> ListExamplesAsync(Guid userId, int offset, int limit, CancellationToken cancellationToken) =>
+        await db.RecurringPayments.AsNoTracking().Where(x => x.UserId == userId && x.IsActive && x.NextPaymentDate.HasValue)
+            .OrderBy(x => x.NextPaymentDate).ThenBy(x => x.Id).Skip(offset).Take(limit)
+            .Select(x => new ReminderPreviewPayment(x.Id, x.Name, x.NextPaymentDate!.Value)).ToListAsync(cancellationToken);
+
+    public async Task<bool> TryChangeReminderProfileAsync(Guid userId, Guid paymentId, EffectiveReminderProfile original,
+        EffectiveReminderProfile target, CancellationToken cancellationToken)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        // Both inherited and individual writes use the same lock order: owner, then payment.
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT 1 FROM \"Users\" WHERE \"Id\" = {userId} FOR UPDATE", cancellationToken);
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT 1 FROM \"RecurringPayments\" WHERE \"Id\" = {paymentId} AND \"UserId\" = {userId} FOR UPDATE", cancellationToken);
+        var current = await db.RecurringPayments.AsNoTracking().Include(x => x.User).Include(x => x.ReminderSettings)
+            .SingleOrDefaultAsync(x => x.Id == paymentId && x.UserId == userId && x.IsActive, cancellationToken);
+        if (current is null || EffectiveReminderProfile.From(current) != original)
+            return false;
+        // This operation uses a fresh handler scope; its draft and user may already be tracked, but not the payment.
+        var payment = await FindPaymentWithReminderSettingsAsync(userId, paymentId, cancellationToken);
+        if (payment is null)
+            return false;
+        if (target.IsInherited)
+            payment.UseUserReminderProfile();
+        else if (target.Profile is { } profile)
+            payment.SetReminderProfile(profile);
+        else
+            payment.DisableReminders();
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
 
     public async Task<IReadOnlyList<RecurringPayment>> GetActiveAsync(Guid userId, DateOnly? from, DateOnly? to, CancellationToken cancellationToken)
     {
@@ -194,8 +247,16 @@ public sealed class PaymentRepository(PersonalAssistantDbContext db) : IPaymentR
         {
             await db.SaveChangesAsync(cancellationToken);
         }
-        catch (DbUpdateConcurrencyException exception)
+        catch (DbUpdateException exception) when (exception is DbUpdateConcurrencyException ||
+            exception.InnerException is PostgresException
+            {
+                SqlState: PostgresErrorCodes.UniqueViolation,
+                ConstraintName: "IX_PaymentTransactions_RecurringPaymentId_PaidPeriod"
+            })
         {
+            // The database rolled this operation back. Do not carry its pending writes
+            // into the next SaveChanges (for example, cleanup of a finished payment dialog).
+            db.ChangeTracker.Clear();
             throw new PaymentConcurrencyException(exception);
         }
     }

@@ -71,6 +71,16 @@ namespace PersonalAssistant.Infrastructure.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.Sql("""
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM "PaymentReminderSettings")
+                        OR EXISTS (SELECT 1 FROM "Users" WHERE "ReminderMode" <> 0 OR "ReminderOverdueMode" <> 0) THEN
+                        RAISE EXCEPTION 'The old reminder schema cannot preserve configured reminder profiles. Restore a tested pre-upgrade backup instead.';
+                    END IF;
+                END $$;
+                """);
+
             migrationBuilder.DropTable(
                 name: "PaymentReminderSettings");
 

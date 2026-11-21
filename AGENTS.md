@@ -48,6 +48,8 @@ Solution: `PersonalAssistant.sln`.
 - `src/PersonalAssistant.Application/PaymentServices.cs` — операции с платежами, статистика и сценарии создания, редактирования и записи оплаты.
 - `PaymentService.GetMonthlyStatisticsAsync` в `PaymentServices.cs` — месячная статистика.
 - `src/PersonalAssistant.Application/ReminderServices.cs` — расчет напоминаний и защита от повторной заявки.
+- `src/PersonalAssistant.Application/ReminderScheduleCalculator.cs` — общий калькулятор для worker и предпросмотра.
+- `src/PersonalAssistant.Application/PaymentReminderSettingsService.cs` — наследование и сохранение профиля платежа.
 - `src/PersonalAssistant.Application/UserRegistrationService.cs` — регистрация, часовой пояс и настройки пользователя.
 - `src/PersonalAssistant.Application/TimeZoneConversationService.cs` — определение российского UTC-смещения по введенному местному времени.
 - `src/PersonalAssistant.Application/AdminService.cs` — административные операции над данными текущего пользователя.
@@ -58,6 +60,7 @@ Solution: `PersonalAssistant.sln`.
 ### Infrastructure
 
 - `src/PersonalAssistant.Infrastructure/PersonalAssistantDbContext.cs` — EF Core DbContext и реализации репозиториев.
+- `src/PersonalAssistant.Infrastructure/ReminderRepository.cs` — учёт слотов доставки и отсрочек в PostgreSQL.
 - `src/PersonalAssistant.Infrastructure/Migrations/` — миграции PostgreSQL.
 - `src/PersonalAssistant.Infrastructure/DependencyInjection.cs` — регистрация инфраструктурных зависимостей.
 - `src/PersonalAssistant.Infrastructure/TelegramUpdateStore.cs` — сохранение обработанных Telegram Update.
@@ -69,6 +72,7 @@ Solution: `PersonalAssistant.sln`.
 - `src/TgBot/TelegramCallbackData.cs` — callback-префиксы и значения.
 - `src/TgBot/TelegramPresentation.cs` — форматирование денег, дат и относительных сроков.
 - `src/TgBot/ReminderBackgroundService.cs` — фоновая отправка напоминаний.
+- `src/TgBot/ReminderTelegramHandler.cs` и `ReminderTelegramSnooze.cs` — редактор профиля, предпросмотр и отсрочки в Telegram.
 - `src/TgBot/BotAccessPolicy.cs` — ограничение доступа по Telegram User ID.
 
 ## Navigation Hints
@@ -88,6 +92,8 @@ Solution: `PersonalAssistant.sln`.
 Если задача касается статистики, начать с `PaymentService.GetMonthlyStatisticsAsync` и `MonthlyStatisticsTests.cs`.
 
 Если задача касается напоминаний, проверить `ReminderServices.cs`, `ReminderBackgroundService.cs`, `ReminderRepository`, уникальный ключ occurrence и тесты идемпотентности.
+
+Если задача касается экрана напоминаний, начать с `ReminderTelegramHandler`, `ReminderTelegramUi` и сквозных тестов `ReminderTelegramFlowTests.cs`. Не дублировать расписание из `ReminderScheduleCalculator` в Telegram.
 
 Если задача касается БД, сначала найти интерфейс репозитория в Application, затем реализацию в Infrastructure, миграции и интеграционные тесты.
 

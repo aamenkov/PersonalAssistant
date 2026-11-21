@@ -40,5 +40,7 @@ public enum ConversationKind
     AddPayment = 1,
     EditPayment = 2,
     RecordPayment = 3,
-    TimeZone = 4
+    TimeZone = 4,
+    ReminderProfile = 5,
+    ReminderSnooze = 6
 }

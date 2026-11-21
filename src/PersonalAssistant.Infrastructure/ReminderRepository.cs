@@ -5,7 +5,7 @@ using PersonalAssistant.Domain;
 
 namespace PersonalAssistant.Infrastructure;
 
-public sealed class ReminderRepository(PersonalAssistantDbContext db) : IReminderRepository
+public sealed class ReminderRepository(PersonalAssistantDbContext db, TimeProvider clock) : IReminderRepository
 {
     public async Task<IReadOnlyList<ReminderCandidate>> GetCandidatesAsync(CancellationToken cancellationToken)
     {
@@ -110,14 +110,18 @@ public sealed class ReminderRepository(PersonalAssistantDbContext db) : IReminde
         return reserved == 1 ? new ReminderReservation(existing.Id, token, existing.AttemptCount) : null;
     }
 
-    public async Task<bool> TryStartAttemptAsync(ReminderDispatch dispatch, ReminderReservation reservation, DateTime utcNow,
-        DateTime leaseUntilUtc, CancellationToken cancellationToken)
+    public async Task<bool> TryStartAttemptAsync(ReminderDispatch dispatch, ReminderReservation reservation, TimeSpan lease,
+        CancellationToken cancellationToken)
     {
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         await LockPaymentAsync(dispatch.Payment.PaymentId, cancellationToken);
+        var isCurrent = await IsCurrentAsync(dispatch, cancellationToken) && !await IsCoveredByPreviousModeAsync(dispatch, cancellationToken);
+        // The slot can expire while waiting for another worker, payment data or the database.
+        var now = clock.GetUtcNow();
+        var utcNow = now.UtcDateTime;
         var held = db.Reminders.Where(x => x.Id == reservation.Id && x.ClaimToken == reservation.Token
             && x.Status == ReminderDeliveryStatus.Reserved && x.LeaseUntilUtc > utcNow);
-        if (!await IsCurrentAsync(dispatch, cancellationToken) || await IsCoveredByPreviousModeAsync(dispatch, cancellationToken))
+        if (!isCurrent || ReminderService.SelectDue(dispatch.Payment, now) != dispatch)
         {
             await held.ExecuteUpdateAsync(x => x.SetProperty(r => r.LeaseUntilUtc, utcNow), cancellationToken);
             await transaction.CommitAsync(cancellationToken);
@@ -126,7 +130,7 @@ public sealed class ReminderRepository(PersonalAssistantDbContext db) : IReminde
 
         var updated = await held.ExecuteUpdateAsync(setters => setters
             .SetProperty(x => x.Status, ReminderDeliveryStatus.Sending)
-            .SetProperty(x => x.LeaseUntilUtc, leaseUntilUtc)
+            .SetProperty(x => x.LeaseUntilUtc, (now + lease).UtcDateTime)
             .SetProperty(x => x.LastAttemptAtUtc, utcNow)
             .SetProperty(x => x.AttemptCount, x => x.AttemptCount + 1), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -156,15 +160,19 @@ public sealed class ReminderRepository(PersonalAssistantDbContext db) : IReminde
         await transaction.CommitAsync(cancellationToken);
     }
 
-    public async Task<bool> UpsertSnoozeAsync(Guid userId, Guid paymentId, DateOnly dueDate, DateTime untilUtc,
-        DateTime utcNow, CancellationToken cancellationToken)
+    public Task<ReminderCandidate?> GetSnoozeTargetAsync(Guid userId, Guid paymentId, DateOnly dueDate, CancellationToken cancellationToken) =>
+        Project(SnoozePayment(userId, paymentId, dueDate)).SingleOrDefaultAsync(cancellationToken);
+
+    public async Task<bool> UpsertSnoozeAsync(Guid userId, Guid paymentId, DateOnly dueDate, Guid? expectedSnoozeId, DateTime untilUtc,
+        CancellationToken cancellationToken)
     {
-        var period = dueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         await LockPaymentAsync(paymentId, cancellationToken);
-        var payment = ActivePayments().Where(x => x.Id == paymentId && x.UserId == userId && x.NextPaymentDate == dueDate
-            && !x.Transactions.Any(t => t.PaidPeriod == period));
-        if (await Project(payment).SingleOrDefaultAsync(cancellationToken) is null)
+        await LockSnoozePaymentAsync(userId, paymentId, cancellationToken);
+        var target = await GetSnoozeTargetAsync(userId, paymentId, dueDate, cancellationToken);
+        var utcNow = clock.GetUtcNow().UtcDateTime;
+        if (untilUtc <= utcNow || target is null ||
+            (target.Snooze is { ConsumedAtUtc: null } pending ? pending.Id : (Guid?)null) != expectedSnoozeId)
             return false;
 
         // A fresh ID fences stale reservations and outcomes belonging to the previous Snooze.
@@ -178,6 +186,33 @@ public sealed class ReminderRepository(PersonalAssistantDbContext db) : IReminde
         await transaction.CommitAsync(cancellationToken);
         return true;
     }
+
+    public async Task<bool> CancelSnoozeAsync(Guid userId, Guid paymentId, DateOnly dueDate, Guid snoozeId,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        await LockPaymentAsync(paymentId, cancellationToken);
+        await LockSnoozePaymentAsync(userId, paymentId, cancellationToken);
+        if (await GetSnoozeTargetAsync(userId, paymentId, dueDate, cancellationToken)
+            is not { Snooze: { ConsumedAtUtc: null } snooze } || snooze.Id != snoozeId)
+            return false;
+
+        // Keep the cutoff so the worker does not replay planned slots hidden by this snooze.
+        await ConsumeSnoozeAsync(snooze.Id, clock.GetUtcNow().UtcDateTime, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
+    private IQueryable<RecurringPayment> SnoozePayment(Guid userId, Guid paymentId, DateOnly dueDate)
+    {
+        var period = dueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        return ActivePayments().Where(x => x.Id == paymentId && x.UserId == userId && x.NextPaymentDate == dueDate
+            && !x.Transactions.Any(t => t.PaidPeriod == period));
+    }
+
+    private Task LockSnoozePaymentAsync(Guid userId, Guid paymentId, CancellationToken cancellationToken) =>
+        db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT 1 FROM \"RecurringPayments\" WHERE \"Id\" = {paymentId} AND \"UserId\" = {userId} FOR UPDATE", cancellationToken);
 
     private IQueryable<RecurringPayment> ActivePayments() =>
         db.RecurringPayments.AsNoTracking().Where(x => x.IsActive && x.NextPaymentDate.HasValue);

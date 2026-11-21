@@ -16,7 +16,10 @@ internal sealed class ReminderBackgroundService(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         logger.LogInformation("Reminder worker started");
-        while (!stoppingToken.IsCancellationRequested)
+        using var ticker = new PeriodicTimer(TimeSpan.FromMinutes(1));
+        if (stoppingToken.IsCancellationRequested)
+            return;
+        do
         {
             try
             {
@@ -30,9 +33,8 @@ internal sealed class ReminderBackgroundService(
             {
                 logger.LogError(exception, "Reminder worker iteration failed");
             }
-
-            await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
         }
+        while (await ticker.WaitForNextTickAsync(stoppingToken));
     }
 
     internal async Task RunPassAsync(CancellationToken cancellationToken)
@@ -72,8 +74,8 @@ internal sealed class ReminderBackgroundService(
             var message = await bot.SendMessage(payment.ChatId, Format(dispatch),
                 replyMarkup: new InlineKeyboardMarkup(new[]
                 {
-                    new[] { InlineKeyboardButton.WithCallbackData("✅ Оплатил", TelegramCallbackData.Payment("pay", payment.PaymentId)) },
-                    new[] { InlineKeyboardButton.WithCallbackData("⏰ Напомнить позже", TelegramCallbackData.ReminderSnooze(payment.PaymentId)) }
+                    new[] { InlineKeyboardButton.WithCallbackData("✅ Оплатил", TelegramCallbackData.Period("p", payment.PaymentId, dispatch.Key.DueDate)) },
+                    new[] { InlineKeyboardButton.WithCallbackData("⏰ Напомнить позже", TelegramCallbackData.Period("s", payment.PaymentId, dispatch.Key.DueDate)) }
                 }), cancellationToken: timeout.Token);
             return new ReminderSendResult(ReminderSendOutcome.Sent, message.Id);
         }

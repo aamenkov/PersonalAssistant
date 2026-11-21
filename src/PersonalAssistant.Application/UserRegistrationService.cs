@@ -7,6 +7,8 @@ public interface IUserRepository
     Task<User?> FindByTelegramUserIdAsync(long telegramUserId, CancellationToken cancellationToken);
     Task AddAsync(User user, CancellationToken cancellationToken);
     Task SaveChangesAsync(CancellationToken cancellationToken);
+    Task<bool> TrySetReminderProfileAsync(long telegramUserId, ReminderProfile original, ReminderProfile profile,
+        DateTime utcNow, CancellationToken cancellationToken);
 }
 
 public sealed class UserTimeZoneService(IUserRepository users)
@@ -24,6 +26,10 @@ public sealed class UserTimeZoneService(IUserRepository users)
 
 public sealed class UserSettingsService(IUserRepository users)
 {
+    public Task<bool> TrySetReminderProfileAsync(long telegramUserId, ReminderProfile original, ReminderProfile profile,
+        DateTime utcNow, CancellationToken cancellationToken) =>
+        users.TrySetReminderProfileAsync(telegramUserId, original, profile, utcNow, cancellationToken);
+
     public Task<User?> FindAsync(long telegramUserId, CancellationToken cancellationToken) =>
         users.FindByTelegramUserIdAsync(telegramUserId, cancellationToken);
 

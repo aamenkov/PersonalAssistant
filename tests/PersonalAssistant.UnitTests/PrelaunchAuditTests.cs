@@ -85,7 +85,7 @@ public sealed class PrelaunchAuditTests
         var states = new InMemoryConversationStateRepository();
         var service = new PaymentRecordConversationService(states, new PaymentService(payments));
 
-        await service.BeginAsync(userId, payment.Id, new DateOnly(2026, 8, 14), CancellationToken.None);
+        await service.BeginAsync(userId, payment.Id, new DateOnly(2026, 8, 15), new DateOnly(2026, 8, 14), CancellationToken.None);
 
         Assert.NotNull(states.State);
         Assert.Equal(ConversationKind.RecordPayment, states.State.Kind);
@@ -149,7 +149,7 @@ public sealed class PrelaunchAuditTests
         var states = new InMemoryConversationStateRepository();
         var service = new PaymentRecordConversationService(states, new PaymentService(paymentRepository));
 
-        await service.BeginAsync(userId, payment.Id, new DateOnly(2026, 8, 14), CancellationToken.None);
+        await service.BeginAsync(userId, payment.Id, new DateOnly(2026, 8, 15), new DateOnly(2026, 8, 14), CancellationToken.None);
         var confirmation = await service.HandleInputAsync(userId, "Ожидаемая сумма", CancellationToken.None);
         Assert.Contains("Дата: 14.08.2026", confirmation);
         Assert.Contains("без комментария", confirmation);

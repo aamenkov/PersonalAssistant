@@ -39,10 +39,14 @@ public interface IReminderRepository
         CancellationToken cancellationToken);
     Task MarkExpiredAttemptsUnknownAsync(DateTime utcNow, CancellationToken cancellationToken);
     Task<ReminderReservation?> TryReserveAsync(ReminderDispatch dispatch, DateTime utcNow, DateTime leaseUntilUtc, CancellationToken cancellationToken);
-    Task<bool> TryStartAttemptAsync(ReminderDispatch dispatch, ReminderReservation reservation, DateTime utcNow, DateTime leaseUntilUtc, CancellationToken cancellationToken);
+    Task<bool> TryStartAttemptAsync(ReminderDispatch dispatch, ReminderReservation reservation, TimeSpan lease, CancellationToken cancellationToken);
     Task CompleteAttemptAsync(ReminderDispatch dispatch, ReminderReservation reservation, ReminderSendResult result,
         DateTime utcNow, DateTime? retryAtUtc, CancellationToken cancellationToken);
-    Task<bool> UpsertSnoozeAsync(Guid userId, Guid paymentId, DateOnly dueDate, DateTime untilUtc, DateTime utcNow, CancellationToken cancellationToken);
+    Task<ReminderCandidate?> GetSnoozeTargetAsync(Guid userId, Guid paymentId, DateOnly dueDate, CancellationToken cancellationToken);
+    Task<bool> UpsertSnoozeAsync(Guid userId, Guid paymentId, DateOnly dueDate, Guid? expectedSnoozeId,
+        DateTime untilUtc, CancellationToken cancellationToken);
+    Task<bool> CancelSnoozeAsync(Guid userId, Guid paymentId, DateOnly dueDate, Guid snoozeId,
+        CancellationToken cancellationToken);
 }
 
 public sealed class ReminderService(IReminderRepository reminders, TimeProvider timeProvider)
@@ -78,12 +82,7 @@ public sealed class ReminderService(IReminderRepository reminders, TimeProvider 
         if (reservation is null)
             return null;
 
-        utcNow = timeProvider.GetUtcNow();
-        if (SelectDue(dispatch.Payment, utcNow) != dispatch)
-            return null;
-
-        return await reminders.TryStartAttemptAsync(dispatch, reservation, utcNow.UtcDateTime,
-            (utcNow + SendLease).UtcDateTime, cancellationToken) ? reservation : null;
+        return await reminders.TryStartAttemptAsync(dispatch, reservation, SendLease, cancellationToken) ? reservation : null;
     }
 
     public Task CompleteAsync(ReminderDispatch dispatch, ReminderReservation reservation, ReminderSendResult result,

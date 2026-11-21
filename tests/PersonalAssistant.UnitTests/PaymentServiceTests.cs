@@ -30,7 +30,7 @@ public sealed class PaymentServiceTests
         repository.Items.Add(payment);
 
         var result = await new PaymentService(repository).RecordPaymentAsync(
-            userId, payment.Id, 35, new DateOnly(2026, 8, 14), null, CancellationToken.None);
+            userId, payment.Id, new DateOnly(2026, 8, 15), 35, new DateOnly(2026, 8, 14), null, CancellationToken.None);
 
         Assert.Equal(PaymentRecordStatus.Recorded, result.Status);
         Assert.Equal(new DateOnly(2026, 9, 15), result.NextPaymentDate);
@@ -48,7 +48,7 @@ public sealed class PaymentServiceTests
         repository.PersistedPeriods.Add((payment.Id, "2026-08-15"));
 
         var result = await new PaymentService(repository).RecordPaymentAsync(
-            userId, payment.Id, 35, new DateOnly(2026, 8, 14), null, CancellationToken.None);
+            userId, payment.Id, new DateOnly(2026, 8, 15), 35, new DateOnly(2026, 8, 14), null, CancellationToken.None);
 
         Assert.Equal(PaymentRecordStatus.AlreadyRecorded, result.Status);
         Assert.Equal(new DateOnly(2026, 8, 15), payment.NextPaymentDate);
@@ -65,7 +65,7 @@ public sealed class PaymentServiceTests
         repository.Items.Add(payment);
 
         var result = await new PaymentService(repository).RecordPaymentAsync(
-            userId, payment.Id, 35, new DateOnly(2026, 8, 14), null, CancellationToken.None);
+            userId, payment.Id, new DateOnly(2026, 8, 15), 35, new DateOnly(2026, 8, 14), null, CancellationToken.None);
 
         Assert.Equal(PaymentRecordStatus.SaveConflict, result.Status);
     }

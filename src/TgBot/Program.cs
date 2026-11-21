@@ -33,6 +33,7 @@ builder.Services.AddScoped<IReminderRepository, ReminderRepository>();
 builder.Services.AddScoped<ITelegramUpdateStore, TelegramUpdateStore>();
 builder.Services.AddScoped<ReminderService>();
 builder.Services.AddScoped<ReminderSnoozeService>();
+builder.Services.AddScoped<ReminderTelegramHandler>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IConversationStateRepository, ConversationStateRepository>();
 builder.Services.AddScoped<PaymentService>();
@@ -110,7 +111,7 @@ internal sealed class TelegramPollingService(
         await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken);
     }
 
-    private async Task HandleUpdateAsync(ITelegramBotClient client, Update update, CancellationToken cancellationToken)
+    internal async Task HandleUpdateAsync(ITelegramBotClient client, Update update, CancellationToken cancellationToken)
     {
         var telegramUserId = update.CallbackQuery?.From.Id ?? update.Message?.From?.Id;
         if (telegramUserId.HasValue && !accessPolicy.IsAllowed(telegramUserId.Value))
@@ -154,6 +155,37 @@ internal sealed class TelegramPollingService(
 
     private async Task HandleUpdateCoreAsync(ITelegramBotClient client, Update update, CancellationToken cancellationToken)
     {
+        if (update.CallbackQuery is { Data: { } reminderData } reminderCallback)
+        {
+            if (reminderData.StartsWith(TelegramCallbackData.ReminderSettingsPrefix, StringComparison.Ordinal)
+                || reminderData.StartsWith(TelegramCallbackData.ReminderDraftPrefix, StringComparison.Ordinal)
+                || reminderData.StartsWith("settings:days:", StringComparison.Ordinal)
+                || reminderData.StartsWith("settings:time:", StringComparison.Ordinal))
+            {
+                using var scope = scopeFactory.CreateScope();
+                await scope.ServiceProvider.GetRequiredService<ReminderTelegramHandler>().HandleCallbackAsync(client, reminderCallback,
+                    reminderData.StartsWith(TelegramCallbackData.SettingsPrefix, StringComparison.Ordinal)
+                        ? TelegramCallbackData.ReminderSettings("global") : reminderData, cancellationToken);
+                return;
+            }
+            if (TelegramCallbackData.TryReadPeriod(reminderData, out var action, out var periodPaymentId, out var expectedDueDate))
+            {
+                if (action == "s")
+                {
+                    using var scope = scopeFactory.CreateScope();
+                    await scope.ServiceProvider.GetRequiredService<ReminderTelegramHandler>()
+                        .HandleCallbackAsync(client, reminderCallback, reminderData, cancellationToken);
+                }
+                else
+                    await BeginPeriodPaymentAsync(client, reminderCallback, periodPaymentId, expectedDueDate, cancellationToken);
+                return;
+            }
+            if (reminderData.StartsWith(TelegramCallbackData.PeriodPrefix, StringComparison.Ordinal))
+            {
+                await client.AnswerCallbackQuery(reminderCallback.Id, "Эта кнопка больше не работает. Откройте платёж заново.", showAlert: true, cancellationToken: cancellationToken);
+                return;
+            }
+        }
         if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery?.Data is { } adminData
             && adminData.StartsWith(TelegramCallbackData.AdminPrefix, StringComparison.Ordinal))
         {
@@ -241,49 +273,7 @@ internal sealed class TelegramPollingService(
                 await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Некорректное напоминание", showAlert: true, cancellationToken: cancellationToken);
                 return;
             }
-
-            using var snoozeScope = scopeFactory.CreateScope();
-            var snoozeUser = await snoozeScope.ServiceProvider.GetRequiredService<IUserRepository>()
-                .FindByTelegramUserIdAsync(update.CallbackQuery.From.Id, cancellationToken);
-            if (snoozeUser is null)
-            {
-                await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Сначала выполните /start", showAlert: true, cancellationToken: cancellationToken);
-                return;
-            }
-
-            if (parts.Length == 3)
-            {
-                await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
-                if (update.CallbackQuery.Message is { } snoozeMessage)
-                    await client.SendMessage(snoozeMessage.Chat.Id, "Когда напомнить еще раз?",
-                        replyMarkup: TelegramUi.ReminderSnoozeKeyboard(snoozePaymentId), cancellationToken: cancellationToken);
-                return;
-            }
-
-            var option = parts[3].ToLowerInvariant() switch
-            {
-                "hour" => ReminderSnoozeOption.InOneHour,
-                "evening" => ReminderSnoozeOption.ThisEvening,
-                "tomorrow" => ReminderSnoozeOption.Tomorrow,
-                _ => (ReminderSnoozeOption?)null
-            };
-            if (!option.HasValue)
-            {
-                await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Некорректный вариант", showAlert: true, cancellationToken: cancellationToken);
-                return;
-            }
-
-            var snoozeResult = await snoozeScope.ServiceProvider.GetRequiredService<ReminderSnoozeService>()
-                .SnoozeAsync(snoozeUser, snoozePaymentId, option.Value, DateTime.UtcNow, cancellationToken);
-            await client.AnswerCallbackQuery(update.CallbackQuery.Id,
-                snoozeResult.Succeeded ? "Напоминание отложено" : "Платеж уже недоступен", cancellationToken: cancellationToken);
-            if (snoozeResult.Succeeded && update.CallbackQuery.Message is { } resultMessage)
-            {
-                var timeZone = TimeZoneResolver.Resolve(snoozeUser.TimeZoneId);
-                var localUntil = TimeZoneInfo.ConvertTimeFromUtc(snoozeResult.SnoozedUntilUtc, timeZone);
-                await client.SendMessage(resultMessage.Chat.Id, $"⏰ Хорошо, напомню {localUntil:dd.MM.yyyy в HH\\:mm}.",
-                    replyMarkup: TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
-            }
+            await ShowLegacyPaymentAsync(client, update.CallbackQuery, snoozePaymentId, cancellationToken);
             return;
         }
 
@@ -317,11 +307,7 @@ internal sealed class TelegramPollingService(
 
             if (parts[1] == "pay")
             {
-                var recorder = scope.ServiceProvider.GetRequiredService<PaymentRecordConversationService>();
-                var response = await recorder.BeginAsync(user.Id, paymentId, LocalDate(user.TimeZoneId), cancellationToken);
-                await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
-                if (update.CallbackQuery.Message is { } message)
-                    await client.SendMessage(message.Chat.Id, response, replyMarkup: TelegramUi.ConversationKeyboard(response, adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
+                await ShowLegacyPaymentAsync(client, update.CallbackQuery, paymentId, cancellationToken);
                 return;
             }
 
@@ -365,8 +351,10 @@ internal sealed class TelegramPollingService(
                         details.RecurrenceInterval, details.RecurrenceUnit, details.PaymentMethod, details.IsAutoDebit,
                         details.ScheduleDayOfMonth, details.IsLastDayOfMonth);
                     await client.SendMessage(message.Chat.Id, TelegramUi.FormatPaymentCard(item, LocalDate(user.TimeZoneId)),
-                        replyMarkup: TelegramUi.PaymentCardKeyboard(paymentId), cancellationToken: cancellationToken);
+                        replyMarkup: TelegramUi.PaymentCardKeyboard(paymentId, details.NextPaymentDate), cancellationToken: cancellationToken);
                 }
+                else if (update.CallbackQuery.Message is { } unavailable)
+                    await client.SendMessage(unavailable.Chat.Id, "Платёж больше недоступен.", cancellationToken: cancellationToken);
                 return;
             }
 
@@ -539,40 +527,6 @@ internal sealed class TelegramPollingService(
                     await client.AnswerCallbackQuery(update.CallbackQuery.Id, $"Валюта по умолчанию: {parts[2]}", cancellationToken: cancellationToken);
                     await RefreshSettingsAsync(client, update.CallbackQuery, settings, cancellationToken);
                 }
-                else if (parts[1] == "days" && parts.Length == 3 && parts[2] == "menu")
-                {
-                    await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
-                    if (update.CallbackQuery.Message is { } message)
-                        await UpdateSettingsMessageAsync(client, message, "Выберите, за сколько дней напоминать:", TelegramUi.ReminderDaysKeyboard(), cancellationToken);
-                    return;
-                }
-                else if (parts[1] == "days" && parts.Length == 3 && int.TryParse(parts[2], out var days))
-                {
-                    if (!await settings.TrySetReminderDaysAsync(update.CallbackQuery.From.Id, days, cancellationToken))
-                    {
-                        await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Эта настройка доступна для обычного режима.", showAlert: true, cancellationToken: cancellationToken);
-                        return;
-                    }
-                    await client.AnswerCallbackQuery(update.CallbackQuery.Id, $"Напоминать за {TelegramPresentation.DaysCount(days)}", cancellationToken: cancellationToken);
-                    await RefreshSettingsAsync(client, update.CallbackQuery, settings, cancellationToken);
-                }
-                else if (parts[1] == "time" && parts.Length == 3 && parts[2] == "menu")
-                {
-                    await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
-                    if (update.CallbackQuery.Message is { } message)
-                        await UpdateSettingsMessageAsync(client, message, "Выберите время напоминаний:", TelegramUi.ReminderTimeKeyboard(), cancellationToken);
-                    return;
-                }
-                else if (parts[1] == "time" && parts.Length == 4 && TimeOnly.TryParse($"{parts[2]}:{parts[3]}", out var reminderTime))
-                {
-                    if (!await settings.TrySetReminderTimeAsync(update.CallbackQuery.From.Id, reminderTime, cancellationToken))
-                    {
-                        await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Эта настройка доступна для обычного режима.", showAlert: true, cancellationToken: cancellationToken);
-                        return;
-                    }
-                    await client.AnswerCallbackQuery(update.CallbackQuery.Id, $"Время напоминаний: {reminderTime:HH:mm}", cancellationToken: cancellationToken);
-                    await RefreshSettingsAsync(client, update.CallbackQuery, settings, cancellationToken);
-                }
             }
             catch (InvalidOperationException)
             {
@@ -644,7 +598,7 @@ internal sealed class TelegramPollingService(
 
             foreach (var item in items)
                 await client.SendMessage(update.Message.Chat.Id, TelegramUi.FormatUpcomingCard(item, today),
-                    replyMarkup: TelegramUi.PaymentCardKeyboard(item.Id), cancellationToken: cancellationToken);
+                    replyMarkup: TelegramUi.PaymentCardKeyboard(item.Id, item.DueDate), cancellationToken: cancellationToken);
         }
         else if (command == "/payments")
         {
@@ -668,7 +622,7 @@ internal sealed class TelegramPollingService(
             var today = LocalDate(user.TimeZoneId);
             foreach (var item in items)
                 await client.SendMessage(update.Message.Chat.Id, TelegramUi.FormatPaymentCard(item, today),
-                    replyMarkup: TelegramUi.PaymentCardKeyboard(item.Id), cancellationToken: cancellationToken);
+                    replyMarkup: TelegramUi.PaymentCardKeyboard(item.Id, item.DueDate), cancellationToken: cancellationToken);
         }
         else if (command is "/edit" or "/disable" or "/pay")
         {
@@ -785,6 +739,10 @@ internal sealed class TelegramPollingService(
                 return;
             }
 
+            if (command is null && await scope.ServiceProvider.GetRequiredService<ReminderTelegramHandler>()
+                .HandleTextAsync(client, user, update.Message, text, cancellationToken))
+                return;
+
             var response = await scope.ServiceProvider.GetRequiredService<TimeZoneConversationService>().HandleInputAsync(from.Id, text, DateTime.UtcNow, cancellationToken)
                 ?? await scope.ServiceProvider.GetRequiredService<PaymentConversationService>().HandleInputAsync(user.Id, text, cancellationToken)
                 ?? await scope.ServiceProvider.GetRequiredService<PaymentEditConversationService>().HandleInputAsync(user.Id, text, cancellationToken)
@@ -801,6 +759,40 @@ internal sealed class TelegramPollingService(
                 await client.SendMessage(update.Message.Chat.Id, "Команда не распознана. Используйте /help.", cancellationToken: cancellationToken);
         }
     }
+
+    private async Task BeginPeriodPaymentAsync(ITelegramBotClient client, CallbackQuery callback, Guid paymentId, DateOnly dueDate, CancellationToken ct)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var user = await scope.ServiceProvider.GetRequiredService<IUserRepository>().FindByTelegramUserIdAsync(callback.From.Id, ct);
+        if (user is null || callback.Message is not { Chat.Type: ChatType.Private } message || message.Chat.Id != user.TelegramChatId)
+        {
+            await client.AnswerCallbackQuery(callback.Id, "Откройте личный чат с ботом и выполните /start.", showAlert: true, cancellationToken: ct);
+            return;
+        }
+        var now = scope.ServiceProvider.GetRequiredService<TimeProvider>().GetUtcNow();
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, TimeZoneResolver.Resolve(user.TimeZoneId)).DateTime);
+        var response = await scope.ServiceProvider.GetRequiredService<PaymentRecordConversationService>()
+            .BeginAsync(user.Id, paymentId, dueDate, today, ct);
+        await client.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+        if (!response.Started)
+        {
+            await client.SendMessage(message.Chat.Id, response.Text, replyMarkup: CurrentPaymentLink(paymentId), cancellationToken: ct);
+            return;
+        }
+        await client.SendMessage(message.Chat.Id, response.Text,
+            replyMarkup: TelegramUi.ConversationKeyboard(response.Text, adminPolicy.IsAdmin(callback.From.Id)), cancellationToken: ct);
+    }
+
+    private static async Task ShowLegacyPaymentAsync(ITelegramBotClient client, CallbackQuery callback, Guid paymentId, CancellationToken ct)
+    {
+        await client.AnswerCallbackQuery(callback.Id, "У этой кнопки не указан срок платежа.", cancellationToken: ct);
+        if (callback.Message is { Chat.Type: ChatType.Private } message)
+            await client.SendMessage(message.Chat.Id, "Чтобы продолжить, откройте актуальный платёж и выберите действие заново.",
+                replyMarkup: CurrentPaymentLink(paymentId), cancellationToken: ct);
+    }
+
+    private static InlineKeyboardMarkup CurrentPaymentLink(Guid paymentId) =>
+        new([[InlineKeyboardButton.WithCallbackData("Открыть актуальный платёж", TelegramCallbackData.Payment("back", paymentId))]]);
 
     private Task HandleErrorAsync(ITelegramBotClient client, Exception exception, CancellationToken cancellationToken)
     {

@@ -52,31 +52,36 @@ public static class ReminderSnoozeCalculator
     }
 }
 
-public sealed class ReminderSnoozeService(
-    IPaymentRepository payments,
-    IReminderRepository snoozes)
+public sealed class ReminderSnoozeService(IReminderRepository snoozes)
 {
+    public Task<ReminderCandidate?> GetTargetAsync(User user, Guid paymentId, DateOnly dueDate, CancellationToken cancellationToken) =>
+        snoozes.GetSnoozeTargetAsync(user.Id, paymentId, dueDate, cancellationToken);
+
     public Task<ReminderSnoozeResult> SnoozeAsync(
         User user,
         Guid paymentId,
+        DateOnly dueDate,
+        Guid? expectedSnoozeId,
         ReminderSnoozeOption option,
         DateTime utcNow,
         CancellationToken cancellationToken)
     {
         var untilUtc = ReminderSnoozeCalculator.CalculateUntil(option, utcNow, user.TimeZoneId, user.ReminderTimeLocal);
-        return SnoozeUntilAsync(user, paymentId, untilUtc, utcNow, cancellationToken);
+        return SnoozeUntilAsync(user, paymentId, dueDate, expectedSnoozeId, untilUtc, utcNow, cancellationToken);
     }
 
-    public Task<ReminderSnoozeResult> SnoozeUntilLocalAsync(User user, Guid paymentId, DateOnly date, TimeOnly time,
+    public Task<ReminderSnoozeResult> SnoozeUntilLocalAsync(User user, Guid paymentId, DateOnly dueDate,
+        Guid? expectedSnoozeId, DateOnly date, TimeOnly time,
         DateTime utcNow, CancellationToken cancellationToken)
     {
         var untilUtc = ReminderSnoozeCalculator.ResolveLocal(date, time, user.TimeZoneId);
         return untilUtc.HasValue
-            ? SnoozeUntilAsync(user, paymentId, untilUtc.Value, utcNow, cancellationToken)
+            ? SnoozeUntilAsync(user, paymentId, dueDate, expectedSnoozeId, untilUtc.Value, utcNow, cancellationToken)
             : Task.FromResult(new ReminderSnoozeResult(false, utcNow));
     }
 
-    public async Task<ReminderSnoozeResult> SnoozeUntilAsync(User user, Guid paymentId, DateTime untilUtc,
+    public async Task<ReminderSnoozeResult> SnoozeUntilAsync(User user, Guid paymentId, DateOnly dueDate,
+        Guid? expectedSnoozeId, DateTime untilUtc,
         DateTime utcNow, CancellationToken cancellationToken)
     {
         if (utcNow.Kind != DateTimeKind.Utc || untilUtc.Kind != DateTimeKind.Utc)
@@ -84,12 +89,12 @@ public sealed class ReminderSnoozeService(
         if (untilUtc <= utcNow)
             return new ReminderSnoozeResult(false, utcNow);
 
-        var payment = await payments.FindForOwnerAsync(user.Id, paymentId, cancellationToken);
-        if (payment is null || !payment.IsActive || !payment.NextPaymentDate.HasValue)
-            return new ReminderSnoozeResult(false, utcNow);
-
-        return await snoozes.UpsertSnoozeAsync(user.Id, payment.Id, payment.NextPaymentDate.Value, untilUtc, utcNow, cancellationToken)
+        return await snoozes.UpsertSnoozeAsync(user.Id, paymentId, dueDate, expectedSnoozeId, untilUtc, cancellationToken)
             ? new ReminderSnoozeResult(true, untilUtc)
             : new ReminderSnoozeResult(false, utcNow);
     }
+
+    public Task<bool> CancelAsync(User user, Guid paymentId, DateOnly dueDate, Guid snoozeId,
+        CancellationToken cancellationToken) =>
+        snoozes.CancelSnoozeAsync(user.Id, paymentId, dueDate, snoozeId, cancellationToken);
 }

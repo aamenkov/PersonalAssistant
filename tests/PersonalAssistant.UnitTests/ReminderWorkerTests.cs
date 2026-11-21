@@ -72,8 +72,8 @@ public sealed class ReminderWorkerTests
                 Assert.Equal(ReminderSendOutcome.Sent, sent.Result.Outcome);
                 Assert.Equal(42, sent.Result.MessageId);
             });
-        Assert.Contains($"payment:pay:{candidates[2].PaymentId}", transport.LastPayload);
-        Assert.Contains($"reminder:snooze:{candidates[2].PaymentId}", transport.LastPayload);
+        Assert.Contains(TelegramCallbackData.Period("p", candidates[2].PaymentId, DueDate), transport.LastPayload);
+        Assert.Contains(TelegramCallbackData.Period("s", candidates[2].PaymentId, DueDate), transport.LastPayload);
     }
 
     private static ReminderCandidate MakeCandidate(long chatId, ReminderMode mode) =>
@@ -99,8 +99,8 @@ public sealed class ReminderWorkerTests
         public Task<ReminderReservation?> TryReserveAsync(ReminderDispatch dispatch, DateTime utcNow, DateTime leaseUntilUtc,
             CancellationToken cancellationToken) => Task.FromResult<ReminderReservation?>(new(Guid.NewGuid(), Guid.NewGuid(), 0));
 
-        public Task<bool> TryStartAttemptAsync(ReminderDispatch dispatch, ReminderReservation reservation, DateTime utcNow,
-            DateTime leaseUntilUtc, CancellationToken cancellationToken) => Task.FromResult(true);
+        public Task<bool> TryStartAttemptAsync(ReminderDispatch dispatch, ReminderReservation reservation,
+            TimeSpan lease, CancellationToken cancellationToken) => Task.FromResult(true);
 
         public Task CompleteAttemptAsync(ReminderDispatch dispatch, ReminderReservation reservation, ReminderSendResult result,
             DateTime utcNow, DateTime? retryAtUtc, CancellationToken cancellationToken)
@@ -109,7 +109,13 @@ public sealed class ReminderWorkerTests
             return Task.CompletedTask;
         }
 
-        public Task<bool> UpsertSnoozeAsync(Guid userId, Guid paymentId, DateOnly dueDate, DateTime untilUtc, DateTime utcNow,
+        public Task<ReminderCandidate?> GetSnoozeTargetAsync(Guid userId, Guid paymentId, DateOnly dueDate,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<bool> UpsertSnoozeAsync(Guid userId, Guid paymentId, DateOnly dueDate, Guid? expectedSnoozeId, DateTime untilUtc,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<bool> CancelSnoozeAsync(Guid userId, Guid paymentId, DateOnly dueDate, Guid snoozeId,
             CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 

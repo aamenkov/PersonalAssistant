@@ -23,22 +23,22 @@ public sealed class ReminderDeliveryTests
         var other = RecurringPayment.Create(user.Id, "Phone", 50, "RUB", 1, RecurrenceUnit.Month, DueDate, Day);
         db.Add(other);
         await db.SaveChangesAsync();
-        var repository = new ReminderRepository(db);
-        var snoozes = new ReminderSnoozeService(new PaymentRepository(db), repository);
         var clock = new ManualClock(Day.AddHours(16));
+        var repository = new ReminderRepository(db, clock);
+        var snoozes = new ReminderSnoozeService(repository);
         var worker = new ReminderService(repository, clock);
-        var secondWorker = new ReminderService(new ReminderRepository(secondDb), clock);
+        var secondWorker = new ReminderService(new ReminderRepository(secondDb, clock), clock);
 
         var initial = Assert.Single(await worker.GetDueAsync(Token), x => x.Payment.PaymentId == payment.Id);
         var stale = await repository.TryReserveAsync(initial, clock.Now, clock.Now.AddMinutes(2), Token);
         Assert.NotNull(stale);
-        Assert.False((await snoozes.SnoozeUntilLocalAsync(user, payment.Id, DueDate, new TimeOnly(15, 0), clock.Now, Token)).Succeeded);
-        Assert.False((await snoozes.SnoozeUntilAsync(user, payment.Id, clock.Now, clock.Now, Token)).Succeeded);
-        Assert.True((await snoozes.SnoozeUntilAsync(user, payment.Id, Day.AddHours(18), clock.Now, Token)).Succeeded);
+        Assert.False((await snoozes.SnoozeUntilLocalAsync(user, payment.Id, DueDate, null, DueDate, new TimeOnly(15, 0), clock.Now, Token)).Succeeded);
+        Assert.False((await snoozes.SnoozeUntilAsync(user, payment.Id, DueDate, null, clock.Now, clock.Now, Token)).Succeeded);
+        Assert.True((await snoozes.SnoozeUntilAsync(user, payment.Id, DueDate, null, Day.AddHours(18), clock.Now, Token)).Succeeded);
         var firstSnooze = await db.ReminderSnoozes.AsNoTracking().SingleAsync();
-        Assert.True((await snoozes.SnoozeUntilLocalAsync(user, payment.Id, DueDate, new TimeOnly(19, 0), clock.Now, Token)).Succeeded);
+        Assert.True((await snoozes.SnoozeUntilLocalAsync(user, payment.Id, DueDate, firstSnooze.Id, DueDate, new TimeOnly(19, 0), clock.Now, Token)).Succeeded);
         Assert.NotEqual(firstSnooze.Id, (await db.ReminderSnoozes.AsNoTracking().SingleAsync()).Id);
-        Assert.False(await repository.TryStartAttemptAsync(initial, stale, clock.Now, clock.Now.AddMinutes(2), Token));
+        Assert.False(await repository.TryStartAttemptAsync(initial, stale, TimeSpan.FromMinutes(2), Token));
         Assert.Equal(other.Id, Assert.Single(await worker.GetDueAsync(Token)).Payment.PaymentId);
 
         clock.Now = Day.AddHours(19);
@@ -58,7 +58,7 @@ public sealed class ReminderDeliveryTests
         var resumed = Assert.Single(await worker.GetDueAsync(Token), x => x.Payment.PaymentId == payment.Id);
         Assert.Equal(new TimeOnly(20, 0), resumed.Key.CriticalTime);
 
-        Assert.True((await snoozes.SnoozeUntilAsync(user, payment.Id, Day.AddHours(22), clock.Now, Token)).Succeeded);
+        Assert.True((await snoozes.SnoozeUntilAsync(user, payment.Id, DueDate, null, Day.AddHours(22), clock.Now, Token)).Succeeded);
         clock.Now = Day.AddHours(22);
         Assert.Equal(ReminderKind.Snoozed, Assert.Single(await worker.GetDueAsync(Token), x => x.Payment.PaymentId == payment.Id).Key.Kind);
     }
@@ -72,10 +72,10 @@ public sealed class ReminderDeliveryTests
         await using var secondDb = new PersonalAssistantDbContext(options);
         await db.Database.MigrateAsync();
         await SeedAsync(db, ReminderMode.Ordinary);
-        var repository = new ReminderRepository(db);
         var clock = new ManualClock(Day.AddHours(10));
+        var repository = new ReminderRepository(db, clock);
         var worker = new ReminderService(repository, clock);
-        var replacement = new ReminderService(new ReminderRepository(secondDb), clock);
+        var replacement = new ReminderService(new ReminderRepository(secondDb, clock), clock);
         var dispatch = Assert.Single(await worker.GetDueAsync(Token));
         var abandoned = await repository.TryReserveAsync(dispatch, clock.Now, clock.Now.AddMinutes(2), Token);
         Assert.NotNull(abandoned);
@@ -86,7 +86,7 @@ public sealed class ReminderDeliveryTests
         Assert.NotNull(newReservation);
         Assert.Equal(abandoned.Id, newReservation.Id);
         Assert.NotEqual(abandoned.Token, newReservation.Token);
-        Assert.False(await repository.TryStartAttemptAsync(dispatch, abandoned, clock.Now, clock.Now.AddMinutes(2), Token));
+        Assert.False(await repository.TryStartAttemptAsync(dispatch, abandoned, TimeSpan.FromMinutes(2), Token));
 
         clock.Now = clock.Now.AddMinutes(3);
         await worker.GetDueAsync(Token);
@@ -106,7 +106,7 @@ public sealed class ReminderDeliveryTests
         await db.Database.MigrateAsync();
         await SeedAsync(db, ReminderMode.Critical);
         var clock = new ManualClock(Day.AddHours(16).AddMinutes(30));
-        var worker = new ReminderService(new ReminderRepository(db), clock);
+        var worker = new ReminderService(new ReminderRepository(db, clock), clock);
         var dispatch = Assert.Single(await worker.GetDueAsync(Token));
         Assert.Equal(new TimeOnly(16, 0), dispatch.Key.CriticalTime);
         var rejected = new ReminderSendResult(ReminderSendOutcome.Rejected, RetryAfter: TimeSpan.FromMinutes(2));
@@ -149,10 +149,12 @@ public sealed class ReminderDeliveryTests
         var inactive = RecurringPayment.Create(user.Id, "Inactive", 50, "RUB", 1, RecurrenceUnit.Month, DueDate, Day);
         db.AddRange(shifted, disabled, inactive);
         await db.SaveChangesAsync();
-        var repository = new ReminderRepository(db);
         var now = Day.AddHours(10);
-        Assert.True(await repository.UpsertSnoozeAsync(user.Id, payment.Id, DueDate, now, now.AddHours(-1), Token));
-        var worker = new ReminderService(repository, new ManualClock(now));
+        var clock = new ManualClock(now.AddHours(-1));
+        var repository = new ReminderRepository(db, clock);
+        Assert.True(await repository.UpsertSnoozeAsync(user.Id, payment.Id, DueDate, null, now, Token));
+        clock.Now = now;
+        var worker = new ReminderService(repository, clock);
         var reservations = new List<(ReminderDispatch Dispatch, ReminderReservation Reservation)>();
         foreach (var dispatch in await worker.GetDueAsync(Token))
         {
@@ -170,7 +172,7 @@ public sealed class ReminderDeliveryTests
         await db.SaveChangesAsync();
 
         foreach (var (dispatch, reservation) in reservations)
-            Assert.False(await repository.TryStartAttemptAsync(dispatch, reservation, now, now.AddMinutes(2), Token));
+            Assert.False(await repository.TryStartAttemptAsync(dispatch, reservation, TimeSpan.FromMinutes(2), Token));
         Assert.All(await db.Reminders.AsNoTracking().ToListAsync(), reminder => Assert.Equal(0, reminder.AttemptCount));
     }
 
@@ -182,7 +184,7 @@ public sealed class ReminderDeliveryTests
         await db.Database.MigrateAsync();
         var (user, _) = await SeedAsync(db, ReminderMode.Ordinary);
         var clock = new ManualClock(Day.AddHours(9));
-        var worker = new ReminderService(new ReminderRepository(db), clock);
+        var worker = new ReminderService(new ReminderRepository(db, clock), clock);
         var morning = Assert.Single(await worker.GetDueAsync(Token));
         var delivered = await worker.TryBeginAsync(morning, Token);
         Assert.NotNull(delivered);
@@ -209,6 +211,29 @@ public sealed class ReminderDeliveryTests
         var sent = await db.Reminders.AsNoTracking().Where(x => x.Status == ReminderDeliveryStatus.Sent).OrderBy(x => x.SentAtUtc).ToListAsync();
         Assert.Equal(new int?[] { 91, 92 }, sent.Select(x => x.TelegramMessageId));
         Assert.Equal(Day.AddHours(9), sent[0].SentAtUtc);
+    }
+
+    [ReminderProfilePostgresFact]
+    public async Task DelayedReservation_DoesNotStartAnOldSlotOrSendAfterTheCriticalWindow()
+    {
+        await using var db = new PersonalAssistantDbContext(ReminderProfileMigrationTests.CreateOptions());
+        await db.Database.MigrateAsync();
+        await SeedAsync(db, ReminderMode.Critical);
+        var clock = new ManualClock(Day.AddHours(20).AddMinutes(59).AddSeconds(59));
+        var repo = new ReminderRepository(db, clock);
+        var worker = new ReminderService(repo, clock);
+        var prior = Assert.Single(await worker.GetDueAsync(Token));
+        var reservation = await repo.TryReserveAsync(prior, clock.Now, clock.Now.AddMinutes(2), Token);
+        Assert.NotNull(reservation);
+        clock.Now = clock.Now.AddSeconds(1);
+        Assert.False(await repo.TryStartAttemptAsync(prior, reservation, TimeSpan.FromMinutes(2), Token));
+        var end = Assert.Single(await worker.GetDueAsync(Token));
+        Assert.Equal(new TimeOnly(21, 0), end.Key.CriticalTime);
+        var endReservation = await repo.TryReserveAsync(end, clock.Now, clock.Now.AddMinutes(2), Token);
+        Assert.NotNull(endReservation);
+        clock.Now = clock.Now.AddMinutes(1);
+        Assert.False(await repo.TryStartAttemptAsync(end, endReservation, TimeSpan.FromMinutes(2), Token));
+        Assert.All(await db.Reminders.ToListAsync(), reminder => Assert.Equal(0, reminder.AttemptCount));
     }
 
     private static async Task<(User User, RecurringPayment Payment)> SeedAsync(PersonalAssistantDbContext db, ReminderMode mode)

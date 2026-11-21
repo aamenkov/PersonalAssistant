@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Npgsql;
 using PersonalAssistant.Application;
 using PersonalAssistant.Domain;
 using PersonalAssistant.Infrastructure;
@@ -15,7 +16,8 @@ public sealed class ReminderProfileMigrationTests
     public async Task Migration_PreservesExistingDataAndSupportsOwnerScopedProfileOverrides()
     {
         // Upgrade a database with real legacy rows, then verify profile round-trips and isolation.
-        await using var db = new PersonalAssistantDbContext(CreateOptions());
+        var options = CreateOptions();
+        await using var db = new PersonalAssistantDbContext(options);
 
         await db.GetService<IMigrator>().MigrateAsync("20260816092953_AddReminderSnooze");
         var userId = Guid.NewGuid();
@@ -77,7 +79,7 @@ public sealed class ReminderProfileMigrationTests
         Assert.Equal(snoozedUntil, snooze.SnoozedUntilUtc);
         Assert.Null(snooze.ConsumedAtUtc);
 
-        var reminderRepository = new ReminderRepository(db);
+        var reminderRepository = new ReminderRepository(db, TimeProvider.System);
         var oldCandidate = Assert.Single(await reminderRepository.GetCandidatesAsync(token), x => x.PaymentId == otherPaymentId);
         var dueNow = new DateTime(2026, 12, 20, 10, 0, 0, DateTimeKind.Utc);
         var oldDispatch = ReminderService.SelectDue(oldCandidate, dueNow);
@@ -115,6 +117,32 @@ public sealed class ReminderProfileMigrationTests
         Assert.True(await profiles.ResetAsync(userId, paymentId, token));
         db.ChangeTracker.Clear();
         Assert.Equal(new EffectiveReminderProfile(newDefault, true), await profiles.GetEffectiveAsync(userId, paymentId, token));
+
+        await users.SetReminderProfileAsync(100, legacy, token);
+        await ReminderTelegramFlowTests.CheckMigratedUiAsync(options, paymentId, now);
+        Assert.Equal(ReminderDeliveryStatus.HistoricalUnknown,
+            (await db.Reminders.AsNoTracking().SingleAsync(x => x.RecurringPaymentId == paymentId)).Status);
+        Assert.Equal(snoozedUntil, (await db.ReminderSnoozes.AsNoTracking().SingleAsync()).SnoozedUntilUtc);
+    }
+
+    [ReminderProfilePostgresFact]
+    public async Task Rollback_DoesNotDestroyConfiguredProfilesBeforeAnyDelivery()
+    {
+        // Even when no reminder has been delivered yet, a schema downgrade would lose saved profiles.
+        await using var db = new PersonalAssistantDbContext(CreateOptions());
+        await db.Database.MigrateAsync();
+        var now = new DateTime(2026, 12, 20, 9, 0, 0, DateTimeKind.Utc);
+        var user = new User(100, 100, null, null, now);
+        var payment = RecurringPayment.Create(user.Id, "VPS", 100, "RUB", 1, RecurrenceUnit.Month, new DateOnly(2026, 12, 20), now);
+        db.AddRange(user, payment);
+        payment.DisableReminders();
+        await db.SaveChangesAsync();
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() =>
+            db.GetService<IMigrator>().MigrateAsync("20260816092953_AddReminderSnooze"));
+        Assert.Contains("cannot preserve configured reminder profiles", exception.MessageText);
+        Assert.Null((await db.Set<PaymentReminderSettings>().AsNoTracking().SingleAsync()).Profile);
+        Assert.Equal(payment.Id, (await db.RecurringPayments.AsNoTracking().SingleAsync()).Id);
     }
 
     internal static DbContextOptions<PersonalAssistantDbContext> CreateOptions()
