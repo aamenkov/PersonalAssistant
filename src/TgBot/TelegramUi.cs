@@ -27,25 +27,12 @@ internal static class TelegramUi
     public static InlineKeyboardMarkup SettingsKeyboard() => new(new[]
     {
         new[] { InlineKeyboardButton.WithCallbackData("Часовой пояс", TelegramCallbackData.Setting("timezone")), InlineKeyboardButton.WithCallbackData("Валюта", TelegramCallbackData.Setting("currency", "menu")) },
-        new[] { InlineKeyboardButton.WithCallbackData("Напоминания", TelegramCallbackData.Setting("days", "menu")), InlineKeyboardButton.WithCallbackData("Время", TelegramCallbackData.Setting("time", "menu")) }
+        new[] { InlineKeyboardButton.WithCallbackData("🔔 Напоминания", TelegramCallbackData.ReminderSettings("global")) }
     });
 
     public static string FormatSettings(User user) =>
         $"⚙️ Настройки\n\nЧасовой пояс: {TelegramPresentation.TimeZone(user.TimeZoneId)}\n" +
-        $"Валюта: {user.DefaultCurrency}\nНапоминать: за {TelegramPresentation.DaysCount(user.ReminderDaysBefore)}\n" +
-        $"Время напоминаний: {user.ReminderTimeLocal:HH:mm}";
-
-    public static InlineKeyboardMarkup ReminderDaysKeyboard() => SettingsOptions(
-    [
-        [InlineKeyboardButton.WithCallbackData("За 1 день", TelegramCallbackData.Setting("days", 1)), InlineKeyboardButton.WithCallbackData("За 3 дня", TelegramCallbackData.Setting("days", 3))],
-        [InlineKeyboardButton.WithCallbackData("За 7 дней", TelegramCallbackData.Setting("days", 7))]
-    ]);
-
-    public static InlineKeyboardMarkup ReminderTimeKeyboard() => SettingsOptions(
-    [
-        [InlineKeyboardButton.WithCallbackData("09:00", TelegramCallbackData.Setting("time", "09:00")), InlineKeyboardButton.WithCallbackData("12:00", TelegramCallbackData.Setting("time", "12:00"))],
-        [InlineKeyboardButton.WithCallbackData("18:00", TelegramCallbackData.Setting("time", "18:00"))]
-    ]);
+        $"Валюта: {user.DefaultCurrency}\nНапоминания: {ReminderTelegramUi.ModeName(user.ReminderMode)}";
 
     private static InlineKeyboardMarkup SettingsOptions(InlineKeyboardButton[][] rows) =>
         new([.. rows, [InlineKeyboardButton.WithCallbackData("◀️ Назад", TelegramCallbackData.Setting("back"))]]);
@@ -56,13 +43,6 @@ internal static class TelegramUi
         [InlineKeyboardButton.WithCallbackData("Доллар США (USD)", TelegramCallbackData.Setting("currency", "USD"))],
         [InlineKeyboardButton.WithCallbackData("Евро (EUR)", TelegramCallbackData.Setting("currency", "EUR"))]
     ]);
-
-    public static InlineKeyboardMarkup ReminderSnoozeKeyboard(Guid paymentId) => new(new[]
-    {
-        new[] { InlineKeyboardButton.WithCallbackData("Через час", TelegramCallbackData.ReminderSnooze(paymentId, "hour")) },
-        new[] { InlineKeyboardButton.WithCallbackData("Сегодня вечером", TelegramCallbackData.ReminderSnooze(paymentId, "evening")) },
-        new[] { InlineKeyboardButton.WithCallbackData("Завтра", TelegramCallbackData.ReminderSnooze(paymentId, "tomorrow")) }
-    });
 
     public static ReplyKeyboardMarkup MainMenuKeyboard(bool isAdmin = false)
     {
@@ -111,23 +91,28 @@ internal static class TelegramUi
     public static InlineKeyboardMarkup PaymentActionKeyboard(IReadOnlyList<PaymentListItem> payments, string action) =>
         new(payments.Select(payment => new[]
         {
-            InlineKeyboardButton.WithCallbackData($"{ActionLabel(action)}: {payment.Name} — {TelegramPresentation.Money(payment.Amount, payment.Currency)}", TelegramCallbackData.Payment(action, payment.Id))
+            InlineKeyboardButton.WithCallbackData($"{ActionLabel(action)}: {payment.Name} — {TelegramPresentation.Money(payment.Amount, payment.Currency)}",
+                action == "pay"
+                    ? TelegramCallbackData.Period("p", payment.Id, payment.DueDate) : TelegramCallbackData.Payment(action, payment.Id))
         }));
 
-    public static InlineKeyboardMarkup PaymentCardKeyboard(Guid paymentId) => new(new[]
+    public static InlineKeyboardMarkup PaymentCardKeyboard(Guid paymentId, DateOnly? dueDate)
     {
-        new[]
+        var edit = InlineKeyboardButton.WithCallbackData("✏️ Изменить", TelegramCallbackData.Payment("edit", paymentId));
+        return new InlineKeyboardMarkup(new[]
         {
-            InlineKeyboardButton.WithCallbackData("✅ Оплатил", TelegramCallbackData.Payment("pay", paymentId)),
-            InlineKeyboardButton.WithCallbackData("✏️ Изменить", TelegramCallbackData.Payment("edit", paymentId))
-        }
-    });
+            dueDate is { } date
+                ? new[] { InlineKeyboardButton.WithCallbackData("✅ Оплатил", TelegramCallbackData.Period("p", paymentId, date)), edit }
+                : new[] { edit }
+        });
+    }
 
     public static InlineKeyboardMarkup EditFieldsKeyboard(Guid paymentId) => new(new[]
     {
         new[] { InlineKeyboardButton.WithCallbackData("💰 Сумма", TelegramCallbackData.EditField("amount", paymentId)), InlineKeyboardButton.WithCallbackData("📅 Расписание", TelegramCallbackData.EditField("schedule", paymentId)) },
         new[] { InlineKeyboardButton.WithCallbackData("💳 Способ", TelegramCallbackData.EditField("method", paymentId)), InlineKeyboardButton.WithCallbackData("🔁 Автосписание", TelegramCallbackData.EditField("autopay", paymentId)) },
         new[] { InlineKeyboardButton.WithCallbackData("✏️ Название", TelegramCallbackData.EditField("name", paymentId)), InlineKeyboardButton.WithCallbackData("📝 Комментарий", TelegramCallbackData.EditField("comment", paymentId)) },
+        new[] { InlineKeyboardButton.WithCallbackData("🔔 Напоминания", TelegramCallbackData.ReminderSettings("payment", paymentId)) },
         new[] { InlineKeyboardButton.WithCallbackData("⏸ Отключить платеж", TelegramCallbackData.Payment("disable", paymentId)) },
         new[] { InlineKeyboardButton.WithCallbackData("◀️ Назад", TelegramCallbackData.Payment("back", paymentId)) }
     });

@@ -39,7 +39,7 @@ public sealed class PresentationRulesTests
         Assert.Equal(2, rows.Length);
         Assert.Equal([("Часовой пояс", "settings:timezone"), ("Валюта", "settings:currency:menu")],
             rows[0].Select(button => (button.Text, button.CallbackData)));
-        Assert.Equal([("Напоминания", "settings:days:menu"), ("Время", "settings:time:menu")],
+        Assert.Equal([("🔔 Напоминания", TelegramCallbackData.ReminderSettings("global"))],
             rows[1].Select(button => (button.Text, button.CallbackData)));
     }
 
@@ -52,13 +52,13 @@ public sealed class PresentationRulesTests
         user.SetReminderSettings(new TimeOnly(12, 30), 7, DateTime.UnixEpoch);
 
         Assert.Equal("⚙️ Настройки\n\nЧасовой пояс: Москва (UTC+3)\nВалюта: EUR\n" +
-            "Напоминать: за 7 дней\nВремя напоминаний: 12:30", TelegramUi.FormatSettings(user));
+            "Напоминания: Обычный", TelegramUi.FormatSettings(user));
 
         var timeZones = TelegramUi.TimeZoneKeyboard(fromSettings: true);
         Assert.Contains(timeZones.InlineKeyboard.SelectMany(row => row), button => button.CallbackData == "timezone:settings:Europe/Moscow");
         Assert.Contains(TelegramUi.TimeZoneKeyboard().InlineKeyboard.SelectMany(row => row), button => button.CallbackData == "timezone:Europe/Moscow");
 
-        foreach (var keyboard in new[] { timeZones, TelegramUi.CurrencyKeyboard(), TelegramUi.ReminderDaysKeyboard(), TelegramUi.ReminderTimeKeyboard() })
+        foreach (var keyboard in new[] { timeZones, TelegramUi.CurrencyKeyboard() })
             Assert.Equal("settings:back", Assert.Single(keyboard.InlineKeyboard.Last()).CallbackData);
     }
 
@@ -93,10 +93,11 @@ public sealed class PresentationRulesTests
     public void PaymentCardKeyboard_KeepsActionsBoundToPaymentId()
     {
         var paymentId = Guid.NewGuid();
-        var keyboard = TelegramUi.PaymentCardKeyboard(paymentId);
+        var dueDate = new DateOnly(2026, 12, 20);
+        var keyboard = TelegramUi.PaymentCardKeyboard(paymentId, dueDate);
         var callbacks = keyboard.InlineKeyboard.SelectMany(row => row).Select(button => button.CallbackData).ToArray();
 
-        Assert.Contains($"payment:pay:{paymentId}", callbacks);
+        Assert.Contains(TelegramCallbackData.Period("p", paymentId, dueDate), callbacks);
         Assert.Contains($"payment:edit:{paymentId}", callbacks);
     }
 }

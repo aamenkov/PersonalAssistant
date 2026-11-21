@@ -32,6 +32,7 @@ classDiagram
     class TelegramUi
     class TelegramCallbackData
     class ReminderBackgroundService
+    class ReminderTelegramHandler
     class BotAccessPolicy
 
     class PaymentService
@@ -39,7 +40,9 @@ classDiagram
     class PaymentEditConversationService
     class PaymentRecordConversationService
     class ReminderService
+    class ReminderScheduleCalculator
     class ReminderSnoozeService
+    class PaymentReminderSettingsService
     class UserRegistrationService
     class UserSettingsService
     class TimeZoneConversationService
@@ -63,6 +66,7 @@ classDiagram
 
     TelegramPollingService --> TelegramUi
     TelegramPollingService --> TelegramCallbackData
+    TelegramPollingService --> ReminderTelegramHandler
     TelegramPollingService --> PaymentService
     TelegramPollingService --> PaymentConversationService
     TelegramPollingService --> PaymentEditConversationService
@@ -75,13 +79,17 @@ classDiagram
     TelegramPollingService --> UserUpdateGate
 
     ReminderBackgroundService --> ReminderService
-    ReminderBackgroundService --> ReminderSnoozeService
+    ReminderTelegramHandler --> UserSettingsService
+    ReminderTelegramHandler --> PaymentReminderSettingsService
+    ReminderTelegramHandler --> ReminderScheduleCalculator
+    ReminderTelegramHandler --> ReminderSnoozeService
+    ReminderTelegramHandler --> ConversationStateRepository
 
     PaymentConversationService --> PaymentService
     PaymentEditConversationService --> PaymentService
     PaymentRecordConversationService --> PaymentService
     PaymentService --> PaymentDateCalculator
-    ReminderService --> PaymentDateCalculator
+    ReminderService --> ReminderScheduleCalculator
     TimeZoneConversationService --> TimeZoneResolver
 
     UserRegistrationService --> UserRepository
@@ -150,11 +158,23 @@ Telegram UI разделяет глобальную навигацию и кон
 
 ## Даты и часовые пояса
 
-Дата, которую вводит пользователь для платежа, — `DateOnly`. Время создания, изменения и отправки напоминаний — UTC. При первом `/start` бот предлагает популярные города и кнопку ввода текущего местного времени. Для российского пользователя вычисляется и подтверждается целочасовое смещение (`UTC+03:00` для Москвы), которое сохраняется в `User.TimeZoneId`; популярные города продолжают храниться как IANA-идентификаторы. `TimeZoneResolver` поддерживает оба формата после перезапуска. `/settings` позволяет повторить выбор, изменить валюту по умолчанию и число дней до напоминания. Дата «сегодня» вычисляется в часовом поясе пользователя. Некорректный часовой пояс не сохраняется.
+Дата, которую вводит пользователь для платежа, — `DateOnly`. Время создания, изменения и отправки напоминаний — UTC. При первом `/start` бот предлагает популярные города и кнопку ввода текущего местного времени. Для российского пользователя вычисляется и подтверждается целочасовое смещение (`UTC+03:00` для Москвы), которое сохраняется в `User.TimeZoneId`; популярные города продолжают храниться как IANA-идентификаторы. `TimeZoneResolver` поддерживает оба формата после перезапуска. `/settings` позволяет повторить выбор, изменить валюту и настроить профиль напоминаний. Дата «сегодня» вычисляется в часовом поясе пользователя. Некорректный часовой пояс не сохраняется.
 
 ## Напоминания и идемпотентность
 
-`ReminderBackgroundService` запускается раз в минуту. `ReminderService` выбирает активные платежи, вычисляет локальные даты и перед отправкой claims уникальный ключ `(PaymentId, DueDate, ReminderKind, LocalDate)` через `ReminderRepository`. Уникальный индекс и обработка конфликта защищают от повторной отправки несколькими экземплярами. Отложенное напоминание хранится отдельно в `ReminderSnooze`: его UTC-время рассчитывается через локальный часовой пояс пользователя, а после отправки snooze атомарно помечается потребленным.
+`ReminderProfile` задаёт режим и правила валидации уведомлений. Общий профиль собирается из полей `User`, поэтому существующие `ReminderDaysBefore` и `ReminderTimeLocal` остаются его источником. Связь с `PaymentReminderSettings` хранит полный индивидуальный профиль, а запись с пустым профилем выключает уведомления для платежа. Отсутствие записи означает наследование. `PaymentReminderSettingsService` ограничивает операции владельцем платежа.
+
+Чистый `ReminderScheduleCalculator` принимает срок, профиль, зону и интервал UTC. `ReminderService` выбирает последний актуальный слот за локальный день, затем пакетно отсекает занятые и уже обработанные слоты. Ключ `(PaymentId, DueDate, LocalDate, Kind, SlotKey)` различает основное событие дня и критические повторы по запланированному местному времени. Если последний слот уже обработан, более ранние слоты пропускаются. Обычное уведомление остаётся актуальным до полуночи. Для критических повторов рассылка останавливается по окончании последней минуты активного окна.
+
+`ReminderBackgroundService` создаёт scope на каждый проход, а минутный таймер не прибавляет время обработки к интервалу. `ReminderRepository` использует уникальный ключ, короткие транзакции с блокировкой по платежу и токен резервирования. Перед попыткой репозиторий проверяет актуальность платежа, оплаты, профиля и отсрочки, а после ожидания блокировки сверяет слот со свежим временем. Telegram вызывается после завершения транзакции. Результат сохраняется отдельно от резервирования. При подтверждённом `429` допускаются до трёх попыток всего с учётом `retry_after` и актуальности слота. Неопределённый результат не повторяется.
+
+`ReminderSnooze` хранит один UTC-срок на платёжный период. Атомарный перенос меняет ID отсрочки, чтобы прежний захват не мог завершить новую. Установка, перенос и отмена проверяют владельца, текущий срок и ID открытой отсрочки под той же блокировкой, что использует worker. Время также повторно проверяется в транзакции. Отмена отмечает отсрочку завершённой, поэтому пропущенные до отмены слоты отбрасываются. Явная отсрочка может сработать вне критического окна.
+
+`ReminderTelegramHandler` ведёт редактор профиля и отсрочки. В `ConversationState` хранится один черновик пользователя со сроком жизни 30 минут, привязкой к сообщению и исходным профилем. Открытие профиля не создаёт записи. Предпросмотр читает только настройки и платежи, использует общий калькулятор (45 дней, на экране до пяти дат) и не зависит от истории доставки. Профиль сохраняется с атомарной проверкой исходного состояния под блокировками PostgreSQL; если черновик создан из общих настроек, они тоже проверяются.
+
+Версионированный callback несёт ID платежа и срок. Кнопка старого формата переводит к актуальному платежу без выполнения действия. Черновик оплаты сохраняет период, EF проверяет исходный срок и активность при записи, а уникальность транзакции защищает от повторного подтверждения. Схема базы в 030 не меняется.
+
+Миграция доставки переносит прежний `SentAtUtc` в `ClaimedAtUtc`. Такие строки получают `HistoricalUnknown` и сохраняют старый дневной ключ. Откат схемы доставки напрямую допустим, пока нет новых записей учёта доставки; откат схемы профилей отдельно запрещает терять индивидуальные и расширенные общие настройки. При обновлении сначала останавливаются все экземпляры старого worker-а.
 
 ## Ошибки и логирование
 
@@ -174,4 +194,4 @@ Docker Compose требует явные `TELEGRAM_BOT_TOKEN` и `POSTGRES_PASSW
 
 Конвертация валют, банковские интеграции, веб-интерфейс, семейный доступ и автоматическое подтверждение списаний пока не реализуются. Полный рефакторинг TelegramPollingService отложен: текущая структура уже разделяет UI, application-сценарии и инфраструктуру, а дополнительная декомпозиция не нужна до появления реальной проблемы сопровождения.
 
-Сценарий выбора расписания реализован пошагово с Reply Keyboard-кнопками: пользователь выбирает периодичность, день месяца/недели или вводит ежегодную дату. Полноценный inline-календарь остается возможным дальнейшим улучшением UX. Напоминание содержит inline-кнопку «Напомнить позже» с вариантами через час, сегодня вечером и завтра.
+Сценарий выбора расписания платежа реализован пошагово с Reply Keyboard-кнопками: пользователь выбирает периодичность, день месяца/недели или вводит ежегодную дату. Полноценный inline-календарь остается возможным дальнейшим улучшением UX.

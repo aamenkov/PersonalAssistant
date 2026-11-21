@@ -7,34 +7,23 @@ using Telegram.Bot.Types.ReplyMarkups;
 namespace PersonalAssistant.Bot;
 
 internal sealed class ReminderBackgroundService(
-    ReminderService reminders,
-    ITelegramBotClient bot,
+    IServiceScopeFactory scopeFactory,
+    [FromKeyedServices(ReminderBackgroundService.BotClientKey)] ITelegramBotClient bot,
     ILogger<ReminderBackgroundService> logger) : BackgroundService
 {
+    internal const string BotClientKey = "reminder-delivery";
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         logger.LogInformation("Reminder worker started");
-        while (!stoppingToken.IsCancellationRequested)
+        using var ticker = new PeriodicTimer(TimeSpan.FromMinutes(1));
+        if (stoppingToken.IsCancellationRequested)
+            return;
+        do
         {
             try
             {
-                var notifications = await reminders.GetDueAsync(DateTime.UtcNow, stoppingToken);
-                foreach (var notification in notifications)
-                {
-                    try
-                    {
-                        await bot.SendMessage(notification.ChatId, Format(notification),
-                            replyMarkup: new InlineKeyboardMarkup(new[]
-                            {
-                                new[] { InlineKeyboardButton.WithCallbackData("✅ Оплатил", TelegramCallbackData.Payment("pay", notification.PaymentId)) },
-                                new[] { InlineKeyboardButton.WithCallbackData("⏰ Напомнить позже", TelegramCallbackData.ReminderSnooze(notification.PaymentId)) }
-                            }), cancellationToken: stoppingToken);
-                    }
-                    catch (RequestException exception)
-                    {
-                        logger.LogWarning("Reminder delivery failed for payment {PaymentId}: {Message}", notification.PaymentId, exception.Message);
-                    }
-                }
+                await RunPassAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -44,28 +33,91 @@ internal sealed class ReminderBackgroundService(
             {
                 logger.LogError(exception, "Reminder worker iteration failed");
             }
+        }
+        while (await ticker.WaitForNextTickAsync(stoppingToken));
+    }
 
-            await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
+    internal async Task RunPassAsync(CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var reminders = scope.ServiceProvider.GetRequiredService<ReminderService>();
+        foreach (var dispatch in await reminders.GetDueAsync(cancellationToken))
+        {
+            try
+            {
+                var reservation = await reminders.TryBeginAsync(dispatch, cancellationToken);
+                if (reservation is null)
+                    continue;
+
+                var result = await SendAsync(dispatch, cancellationToken);
+                await reminders.CompleteAsync(dispatch, reservation, result, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                logger.LogError(exception, "Failed to process reminder for payment {PaymentId}", dispatch.Payment.PaymentId);
+            }
         }
     }
 
-    private static string Format(ReminderNotification notification)
+    private async Task<ReminderSendResult> SendAsync(ReminderDispatch dispatch, CancellationToken cancellationToken)
     {
-        var amount = TelegramPresentation.Money(notification.Amount, notification.Currency);
-        if (notification.Kind == ReminderKind.Snoozed)
-            return $"⏰ Напоминание\n\n{notification.Name}\n{amount}\n\nПора проверить и оплатить платеж.";
-        if (notification.Kind == ReminderKind.Overdue)
+        var payment = dispatch.Payment;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
+
+        try
         {
-            return $"⚠️ Платеж просрочен\n\n{notification.Name}\n{amount}\n\nСрок оплаты был {TelegramPresentation.RelativeDays(notification.DaysUntilDue)}.";
+            var message = await bot.SendMessage(payment.ChatId, Format(dispatch),
+                replyMarkup: new InlineKeyboardMarkup(new[]
+                {
+                    new[] { InlineKeyboardButton.WithCallbackData("✅ Оплатил", TelegramCallbackData.Period("p", payment.PaymentId, dispatch.Key.DueDate)) },
+                    new[] { InlineKeyboardButton.WithCallbackData("⏰ Напомнить позже", TelegramCallbackData.Period("s", payment.PaymentId, dispatch.Key.DueDate)) }
+                }), cancellationToken: timeout.Token);
+            return new ReminderSendResult(ReminderSendOutcome.Sent, message.Id);
+        }
+        catch (ApiRequestException exception) when (exception.ErrorCode == 429)
+        {
+            logger.LogWarning("Telegram rate limit for payment {PaymentId}", payment.PaymentId);
+            return new ReminderSendResult(ReminderSendOutcome.Rejected,
+                RetryAfter: TimeSpan.FromSeconds(exception.Parameters?.RetryAfter ?? 60));
+        }
+        catch (ApiRequestException exception) when (exception.ErrorCode is >= 400 and < 500 and not 408)
+        {
+            logger.LogWarning("Telegram rejected reminder for payment {PaymentId} with code {Code}", payment.PaymentId, exception.ErrorCode);
+            return new ReminderSendResult(ReminderSendOutcome.Rejected);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning("Reminder outcome unknown for payment {PaymentId} ({ErrorType})", payment.PaymentId, exception.GetType().Name);
+            return new ReminderSendResult(ReminderSendOutcome.Unknown);
+        }
+    }
+
+    private static string Format(ReminderDispatch dispatch)
+    {
+        var payment = dispatch.Payment;
+        var amount = TelegramPresentation.Money(payment.Amount, payment.Currency);
+        if (dispatch.Key.Kind == ReminderKind.Snoozed)
+            return $"⏰ Напоминание\n\n{payment.Name}\n{amount}\n\nПора проверить и оплатить платеж.";
+        if (dispatch.Key.Kind == ReminderKind.Overdue)
+        {
+            return $"⚠️ Платеж просрочен\n\n{payment.Name}\n{amount}\n\nСрок оплаты был {TelegramPresentation.RelativeDays(dispatch.DaysUntilDue)}.";
         }
 
-        if (notification.Kind == ReminderKind.DueToday)
+        if (dispatch.Key.Kind == ReminderKind.DueToday)
         {
-            var prefix = notification.IsAutoDebit ? "Сегодня ожидается автоматическое списание:" : "Сегодня нужно оплатить:";
-            return $"🔔 Сегодня платеж\n\n{prefix}\n{notification.Name}\n{amount}";
+            var prefix = payment.IsAutoDebit ? "Сегодня ожидается автоматическое списание:" : "Сегодня нужно оплатить:";
+            return $"🔔 Сегодня платеж\n\n{prefix}\n{payment.Name}\n{amount}";
         }
 
-        var reminderPrefix = notification.IsAutoDebit ? "Через" : "Через";
-        return $"🔔 Скоро платеж\n\n{reminderPrefix} {notification.DaysUntilDue} дн. нужно оплатить:\n\n{notification.Name}\n{amount}\n📅 до {notification.DueDate:dd.MM.yyyy}";
+        return $"🔔 Скоро платеж\n\nЧерез {dispatch.DaysUntilDue} дн. нужно оплатить:\n\n{payment.Name}\n{amount}\n📅 до {payment.DueDate:dd.MM.yyyy}";
     }
 }

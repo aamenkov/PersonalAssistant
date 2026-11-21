@@ -7,6 +7,8 @@ public interface IUserRepository
     Task<User?> FindByTelegramUserIdAsync(long telegramUserId, CancellationToken cancellationToken);
     Task AddAsync(User user, CancellationToken cancellationToken);
     Task SaveChangesAsync(CancellationToken cancellationToken);
+    Task<bool> TrySetReminderProfileAsync(long telegramUserId, ReminderProfile original, ReminderProfile profile,
+        DateTime utcNow, CancellationToken cancellationToken);
 }
 
 public sealed class UserTimeZoneService(IUserRepository users)
@@ -24,6 +26,10 @@ public sealed class UserTimeZoneService(IUserRepository users)
 
 public sealed class UserSettingsService(IUserRepository users)
 {
+    public Task<bool> TrySetReminderProfileAsync(long telegramUserId, ReminderProfile original, ReminderProfile profile,
+        DateTime utcNow, CancellationToken cancellationToken) =>
+        users.TrySetReminderProfileAsync(telegramUserId, original, profile, utcNow, cancellationToken);
+
     public Task<User?> FindAsync(long telegramUserId, CancellationToken cancellationToken) =>
         users.FindByTelegramUserIdAsync(telegramUserId, cancellationToken);
 
@@ -35,20 +41,32 @@ public sealed class UserSettingsService(IUserRepository users)
         await users.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task SetReminderSettingsAsync(long telegramUserId, TimeOnly reminderTimeLocal, int reminderDaysBefore, CancellationToken cancellationToken)
+    public async Task SetReminderProfileAsync(long telegramUserId, ReminderProfile profile, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(profile);
         var user = await users.FindByTelegramUserIdAsync(telegramUserId, cancellationToken)
             ?? throw new InvalidOperationException("User is not registered.");
-        user.SetReminderSettings(reminderTimeLocal, reminderDaysBefore, DateTime.UtcNow);
+        user.SetReminderProfile(profile, DateTime.UtcNow);
         await users.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task SetReminderTimeAsync(long telegramUserId, TimeOnly reminderTimeLocal, CancellationToken cancellationToken)
+    public Task<bool> TrySetReminderDaysAsync(long telegramUserId, int daysBefore, CancellationToken cancellationToken) =>
+        TryUpdateOrdinaryReminderAsync(telegramUserId, daysBefore, null, cancellationToken);
+
+    public Task<bool> TrySetReminderTimeAsync(long telegramUserId, TimeOnly reminderTimeLocal, CancellationToken cancellationToken) =>
+        TryUpdateOrdinaryReminderAsync(telegramUserId, null, reminderTimeLocal, cancellationToken);
+
+    private async Task<bool> TryUpdateOrdinaryReminderAsync(
+        long telegramUserId, int? daysBefore, TimeOnly? reminderTimeLocal, CancellationToken cancellationToken)
     {
         var user = await users.FindByTelegramUserIdAsync(telegramUserId, cancellationToken)
             ?? throw new InvalidOperationException("User is not registered.");
-        user.SetReminderSettings(reminderTimeLocal, user.ReminderDaysBefore, DateTime.UtcNow);
+        if (user.ReminderMode != ReminderMode.Ordinary)
+            return false;
+
+        user.SetReminderSettings(reminderTimeLocal ?? user.ReminderTimeLocal, daysBefore ?? user.ReminderDaysBefore, DateTime.UtcNow);
         await users.SaveChangesAsync(cancellationToken);
+        return true;
     }
 }
 

@@ -13,7 +13,6 @@ public interface IPaymentRepository
     Task<IReadOnlyList<PaymentTransaction>> GetTransactionsForOwnerAsync(Guid userId, Guid? paymentId, DateOnly? from, DateOnly? to, CancellationToken cancellationToken);
     Task<bool> HasTransactionForPeriodAsync(Guid userId, Guid paymentId, string paidPeriod, CancellationToken cancellationToken);
     Task SaveChangesAsync(CancellationToken cancellationToken);
-    Task<IReadOnlyList<ReminderCandidate>> GetReminderCandidatesAsync(CancellationToken cancellationToken);
     Task<int> ClearTransactionHistoryAsync(Guid userId, CancellationToken cancellationToken);
     Task<int> DeleteAllPaymentsAsync(Guid userId, CancellationToken cancellationToken);
 }
@@ -134,7 +133,8 @@ public enum PaymentRecordStatus
     Recorded,
     AlreadyRecorded,
     PaymentUnavailable,
-    SaveConflict
+    SaveConflict,
+    PeriodChanged
 }
 
 public sealed record PaymentRecordResult(
@@ -144,6 +144,9 @@ public sealed record PaymentRecordResult(
 
 public sealed class PaymentService(IPaymentRepository payments)
 {
+    internal Task<bool> IsPeriodPaidAsync(Guid userId, Guid paymentId, DateOnly dueDate, CancellationToken cancellationToken) =>
+        payments.HasTransactionForPeriodAsync(userId, paymentId, dueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), cancellationToken);
+
     public async Task CreateAsync(
         Guid userId,
         string name,
@@ -248,6 +251,7 @@ public sealed class PaymentService(IPaymentRepository payments)
     public async Task<PaymentRecordResult> RecordPaymentAsync(
         Guid userId,
         Guid paymentId,
+        DateOnly expectedDueDate,
         decimal paidAmount,
         DateOnly paidDate,
         string? comment,
@@ -257,12 +261,13 @@ public sealed class PaymentService(IPaymentRepository payments)
         if (payment is null || !payment.NextPaymentDate.HasValue)
             return new PaymentRecordResult(PaymentRecordStatus.PaymentUnavailable);
 
-        var dueDate = payment.NextPaymentDate.Value;
-        var paidPeriod = dueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var paidPeriod = expectedDueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (await payments.HasTransactionForPeriodAsync(userId, paymentId, paidPeriod, cancellationToken))
             return new PaymentRecordResult(PaymentRecordStatus.AlreadyRecorded, payment.RecurrenceUnit == RecurrenceUnit.Once, payment.NextPaymentDate);
         if (!payment.IsActive)
             return new PaymentRecordResult(PaymentRecordStatus.PaymentUnavailable);
+        if (payment.NextPaymentDate != expectedDueDate)
+            return new PaymentRecordResult(PaymentRecordStatus.PeriodChanged);
 
         var transaction = payment.RecordPayment(paidAmount, paidDate, paidPeriod, comment, DateTime.UtcNow);
         await payments.AddTransactionAsync(transaction, cancellationToken);
@@ -1044,15 +1049,21 @@ public sealed class PaymentRecordConversationService(
     IConversationStateRepository states,
     PaymentService payments)
 {
-    public async Task<string> BeginAsync(Guid userId, Guid paymentId, DateOnly localToday, CancellationToken cancellationToken)
+    public async Task<(string Text, bool Started)> BeginAsync(Guid userId, Guid paymentId, DateOnly expectedDueDate,
+        DateOnly localToday, CancellationToken cancellationToken)
     {
         var payment = await payments.GetDetailsAsync(userId, paymentId, cancellationToken);
         if (payment is null)
-            return "Платеж не найден или уже отключен.";
+            return ("Платеж не найден или уже отключен.", false);
+
+        if (payment.NextPaymentDate != expectedDueDate
+            || await payments.IsPeriodPaidAsync(userId, paymentId, payment.NextPaymentDate, cancellationToken))
+            return ("Этот срок уже не актуален. Откройте платеж заново.", false);
 
         var draft = new PaymentRecordDraft
         {
             PaymentId = payment.Id,
+            DueDate = payment.NextPaymentDate,
             ExpectedAmount = payment.Amount,
             PaidAmount = payment.Amount,
             PaidDate = localToday,
@@ -1066,7 +1077,7 @@ public sealed class PaymentRecordConversationService(
         else
             await states.AddAsync(ConversationState.Create(userId, ConversationKind.RecordPayment, payload, DateTime.UtcNow), cancellationToken);
         await states.SaveChangesAsync(cancellationToken);
-        return $"Платеж: {payment.Name}\nОжидаемая сумма: {payment.Amount:0.##} {payment.Currency}\n\nВведите другую сумму или нажмите «Ожидаемая сумма»:";
+        return ($"Платеж: {payment.Name}\nОжидаемая сумма: {payment.Amount:0.##} {payment.Currency}\n\nВведите другую сумму или нажмите «Ожидаемая сумма»:", true);
     }
 
     public async Task<string?> HandleInputAsync(Guid userId, string input, CancellationToken cancellationToken)
@@ -1084,8 +1095,12 @@ public sealed class PaymentRecordConversationService(
         }
 
         var draft = JsonSerializer.Deserialize<PaymentRecordDraft>(state.PayloadJson);
-        if (draft is null)
-            return "Не удалось восстановить оплату. Запустите /pay заново.";
+        if (draft?.DueDate is null)
+        {
+            states.Remove(state);
+            await states.SaveChangesAsync(cancellationToken);
+            return "Отметка оплаты отменена: откройте актуальный платеж заново.";
+        }
 
         switch (draft.Step)
         {
@@ -1138,14 +1153,15 @@ public sealed class PaymentRecordConversationService(
                     && !input.Equals("сохранить", StringComparison.OrdinalIgnoreCase))
                     return "Выберите «Сохранить» или измените дату/комментарий:";
 
-                var result = await payments.RecordPaymentAsync(userId, draft.PaymentId, draft.PaidAmount!.Value, draft.PaidDate!.Value, draft.Comment, cancellationToken);
-                if (result.Status == PaymentRecordStatus.PaymentUnavailable)
-                    return "Этот платеж больше недоступен. Возможно, он был отключен. Запустите /pay и выберите другой платеж.";
+                var result = await payments.RecordPaymentAsync(userId, draft.PaymentId, draft.DueDate.Value,
+                    draft.PaidAmount!.Value, draft.PaidDate!.Value, draft.Comment, cancellationToken);
                 if (result.Status == PaymentRecordStatus.SaveConflict)
                     return "Не удалось сохранить оплату из-за изменения данных. Проверьте платеж и нажмите «Да» еще раз.";
 
                 states.Remove(state);
                 await states.SaveChangesAsync(cancellationToken);
+                if (result.Status is PaymentRecordStatus.PaymentUnavailable or PaymentRecordStatus.PeriodChanged)
+                    return "Отметка оплаты отменена: этот срок больше не актуален. Откройте платеж заново.";
                 if (result.Status == PaymentRecordStatus.AlreadyRecorded)
                     return "Оплата уже сохранена. Повторная запись не создана.";
                 return result.IsOneTime
@@ -1167,6 +1183,7 @@ public sealed class PaymentRecordConversationService(
     private sealed class PaymentRecordDraft
     {
         public Guid PaymentId { get; set; }
+        public DateOnly? DueDate { get; set; }
         public decimal? ExpectedAmount { get; set; }
         public decimal? PaidAmount { get; set; }
         public DateOnly? PaidDate { get; set; }

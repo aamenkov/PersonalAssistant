@@ -30,7 +30,7 @@ public sealed class PaymentServiceTests
         repository.Items.Add(payment);
 
         var result = await new PaymentService(repository).RecordPaymentAsync(
-            userId, payment.Id, 35, new DateOnly(2026, 8, 14), null, CancellationToken.None);
+            userId, payment.Id, new DateOnly(2026, 8, 15), 35, new DateOnly(2026, 8, 14), null, CancellationToken.None);
 
         Assert.Equal(PaymentRecordStatus.Recorded, result.Status);
         Assert.Equal(new DateOnly(2026, 9, 15), result.NextPaymentDate);
@@ -48,7 +48,7 @@ public sealed class PaymentServiceTests
         repository.PersistedPeriods.Add((payment.Id, "2026-08-15"));
 
         var result = await new PaymentService(repository).RecordPaymentAsync(
-            userId, payment.Id, 35, new DateOnly(2026, 8, 14), null, CancellationToken.None);
+            userId, payment.Id, new DateOnly(2026, 8, 15), 35, new DateOnly(2026, 8, 14), null, CancellationToken.None);
 
         Assert.Equal(PaymentRecordStatus.AlreadyRecorded, result.Status);
         Assert.Equal(new DateOnly(2026, 8, 15), payment.NextPaymentDate);
@@ -65,7 +65,7 @@ public sealed class PaymentServiceTests
         repository.Items.Add(payment);
 
         var result = await new PaymentService(repository).RecordPaymentAsync(
-            userId, payment.Id, 35, new DateOnly(2026, 8, 14), null, CancellationToken.None);
+            userId, payment.Id, new DateOnly(2026, 8, 15), 35, new DateOnly(2026, 8, 14), null, CancellationToken.None);
 
         Assert.Equal(PaymentRecordStatus.SaveConflict, result.Status);
     }
@@ -105,28 +105,9 @@ public sealed class PaymentServiceTests
         Assert.Equal(["Раньше", "Позже"], result.Select(x => x.Name));
     }
 
-    [Fact]
-    public async Task ReminderService_ClaimsDueReminderOnlyOnce()
-    {
-        var payments = new InMemoryPaymentRepository();
-        payments.ReminderCandidates.Add(new ReminderCandidate(
-            Guid.NewGuid(), Guid.NewGuid(), 123, "Internet", 400, "RUB",
-            new DateOnly(2026, 8, 17), false, "UTC", new TimeOnly(9), 3));
-        var reminderRepository = new InMemoryReminderRepository();
-        var service = new ReminderService(payments, reminderRepository);
-
-        var first = await service.GetDueAsync(new DateTime(2026, 8, 14, 9, 1, 0, DateTimeKind.Utc), CancellationToken.None);
-        var second = await service.GetDueAsync(new DateTime(2026, 8, 14, 9, 2, 0, DateTimeKind.Utc), CancellationToken.None);
-
-        Assert.Single(first);
-        Assert.Equal(ReminderKind.BeforeDue, first[0].Kind);
-        Assert.Empty(second);
-    }
-
     private sealed class InMemoryPaymentRepository : IPaymentRepository
     {
         public List<RecurringPayment> Items { get; } = [];
-        public List<ReminderCandidate> ReminderCandidates { get; } = [];
         public HashSet<(Guid PaymentId, string PaidPeriod)> PersistedPeriods { get; } = [];
         public bool ThrowConcurrencyOnSave { get; init; }
 
@@ -159,32 +140,11 @@ public sealed class PaymentServiceTests
         }
 
         public Task AddTransactionAsync(PaymentTransaction transaction, CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task<IReadOnlyList<ReminderCandidate>> GetReminderCandidatesAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<ReminderCandidate>>(ReminderCandidates);
 
         public Task<bool> HasTransactionForPeriodAsync(Guid userId, Guid paymentId, string paidPeriod, CancellationToken cancellationToken) =>
             Task.FromResult(PersistedPeriods.Contains((paymentId, paidPeriod)));
 
         public Task<int> ClearTransactionHistoryAsync(Guid userId, CancellationToken cancellationToken) => Task.FromResult(0);
         public Task<int> DeleteAllPaymentsAsync(Guid userId, CancellationToken cancellationToken) => Task.FromResult(0);
-    }
-
-    private sealed class InMemoryReminderRepository : IReminderRepository
-    {
-        private readonly HashSet<(Guid PaymentId, DateOnly DueDate, DateOnly LocalDate, ReminderKind Kind)> claims = [];
-
-        public Task<bool> TryClaimAsync(Guid paymentId, DateOnly dueDate, DateOnly localDate, ReminderKind kind, DateTime claimedAtUtc, CancellationToken cancellationToken) =>
-            Task.FromResult(claims.Add((paymentId, dueDate, localDate, kind)));
-
-        public Task<bool> HasActiveSnoozeAsync(Guid paymentId, DateOnly dueDate, DateTime utcNow, CancellationToken cancellationToken) =>
-            Task.FromResult(false);
-
-        public Task UpsertSnoozeAsync(Guid paymentId, DateOnly dueDate, DateTime snoozedUntilUtc, DateTime createdAtUtc, CancellationToken cancellationToken) =>
-            Task.CompletedTask;
-
-        public Task<IReadOnlyList<SnoozedReminderCandidate>> GetDueSnoozesAsync(DateTime utcNow, CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<SnoozedReminderCandidate>>([]);
-
-        public Task<bool> TryConsumeSnoozeAsync(Guid snoozeId, DateTime consumedAtUtc, CancellationToken cancellationToken) =>
-            Task.FromResult(false);
     }
 }

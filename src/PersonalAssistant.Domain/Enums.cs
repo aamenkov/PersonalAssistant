@@ -24,11 +24,23 @@ public enum ReminderKind
     Snoozed = 3
 }
 
+public enum ReminderDeliveryStatus
+{
+    HistoricalUnknown = 0,
+    Reserved = 1,
+    Sending = 2,
+    Sent = 3,
+    Failed = 4,
+    Unknown = 5
+}
+
 public enum ConversationKind
 {
     None = 0,
     AddPayment = 1,
     EditPayment = 2,
     RecordPayment = 3,
-    TimeZone = 4
+    TimeZone = 4,
+    ReminderProfile = 5,
+    ReminderSnooze = 6
 }

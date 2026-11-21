@@ -73,12 +73,12 @@ internal static class TelegramPresentation
         _ => "воскресеньям"
     };
 
-    public static string TimeZone(string timeZoneId)
+    public static string TimeZone(string timeZoneId, DateTimeOffset? utcNow = null)
     {
         try
         {
             var zone = TimeZoneResolver.Resolve(timeZoneId);
-            var offset = zone.GetUtcOffset(DateTime.UtcNow);
+            var offset = zone.GetUtcOffset(utcNow ?? DateTimeOffset.UtcNow);
             var absolute = offset.Duration();
             var sign = offset < TimeSpan.Zero ? "-" : "+";
             var utcOffset = absolute.Minutes == 0 ? $"UTC{sign}{absolute.Hours}" : $"UTC{sign}{absolute.Hours}:{absolute.Minutes:00}";
