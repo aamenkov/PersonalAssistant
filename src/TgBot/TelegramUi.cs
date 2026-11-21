@@ -7,46 +7,61 @@ namespace PersonalAssistant.Bot;
 
 internal static class TelegramUi
 {
-    public static InlineKeyboardMarkup TimeZoneKeyboard() => new(new[]
+    private static readonly CultureInfo Russian = CultureInfo.GetCultureInfo("ru-RU");
+
+    public static InlineKeyboardMarkup TimeZoneKeyboard(bool fromSettings = false)
     {
-        new[] { InlineKeyboardButton.WithCallbackData("UTC (UTC+0)", TelegramCallbackData.TimeZone("UTC")), InlineKeyboardButton.WithCallbackData("Москва (UTC+3)", TelegramCallbackData.TimeZone("Europe/Moscow")) },
-        new[] { InlineKeyboardButton.WithCallbackData("Берлин (UTC+1)", TelegramCallbackData.TimeZone("Europe/Berlin")), InlineKeyboardButton.WithCallbackData("Алматы (UTC+5)", TelegramCallbackData.TimeZone("Asia/Almaty")) },
-        new[] { InlineKeyboardButton.WithCallbackData("Токио (UTC+9)", TelegramCallbackData.TimeZone("Asia/Tokyo")), InlineKeyboardButton.WithCallbackData("Нью-Йорк (UTC−5)", TelegramCallbackData.TimeZone("America/New_York")) },
-        new[] { InlineKeyboardButton.WithCallbackData("🕒 Указать текущее время", TelegramCallbackData.TimeZone("custom")) }
+        InlineKeyboardButton Zone(string id) =>
+            InlineKeyboardButton.WithCallbackData(TelegramPresentation.TimeZone(id), TelegramCallbackData.TimeZone(id, fromSettings));
+
+        InlineKeyboardButton[][] rows =
+        [
+            [Zone("UTC"), Zone("Europe/Moscow")],
+            [Zone("Europe/Berlin"), Zone("Asia/Almaty")],
+            [Zone("Asia/Tokyo"), Zone("America/New_York")],
+            [InlineKeyboardButton.WithCallbackData("🕒 Указать текущее время", TelegramCallbackData.TimeZone("custom", fromSettings))]
+        ];
+        return fromSettings ? SettingsOptions(rows) : new InlineKeyboardMarkup(rows);
+    }
+
+    public static InlineKeyboardMarkup SettingsKeyboard() => new(new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("Часовой пояс", TelegramCallbackData.Setting("timezone")), InlineKeyboardButton.WithCallbackData("Валюта", TelegramCallbackData.Setting("currency", "menu")) },
+        new[] { InlineKeyboardButton.WithCallbackData("Напоминания", TelegramCallbackData.Setting("days", "menu")), InlineKeyboardButton.WithCallbackData("Время", TelegramCallbackData.Setting("time", "menu")) }
     });
 
-    public static InlineKeyboardMarkup SettingsKeyboard(string currency, string timeZoneId = "UTC", int reminderDays = 3, TimeOnly? reminderTime = null) => new(new[]
-    {
-        new[] { InlineKeyboardButton.WithCallbackData($"Часовой пояс ({TelegramPresentation.TimeZone(timeZoneId)})", TelegramCallbackData.Setting("timezone")) },
-        new[] { InlineKeyboardButton.WithCallbackData($"Валюта ({currency})", TelegramCallbackData.Setting("currency", "menu")) },
-        new[] { InlineKeyboardButton.WithCallbackData($"Дни до напоминания ({reminderDays})", TelegramCallbackData.Setting("days", "menu")) },
-        new[] { InlineKeyboardButton.WithCallbackData($"Время напоминания ({(reminderTime ?? new TimeOnly(9)).ToString("HH\\:mm")})", TelegramCallbackData.Setting("time", "menu")) }
-    });
+    public static string FormatSettings(User user) =>
+        $"⚙️ Настройки\n\nЧасовой пояс: {TelegramPresentation.TimeZone(user.TimeZoneId)}\n" +
+        $"Валюта: {user.DefaultCurrency}\nНапоминать: за {TelegramPresentation.DaysCount(user.ReminderDaysBefore)}\n" +
+        $"Время напоминаний: {user.ReminderTimeLocal:HH:mm}";
 
-    public static InlineKeyboardMarkup ReminderDaysKeyboard() => new(new[]
-    {
-        new[] { InlineKeyboardButton.WithCallbackData("За 1 день", TelegramCallbackData.Setting("days", 1)), InlineKeyboardButton.WithCallbackData("За 3 дня", TelegramCallbackData.Setting("days", 3)) },
-        new[] { InlineKeyboardButton.WithCallbackData("За 7 дней", TelegramCallbackData.Setting("days", 7)) }
-    });
+    public static InlineKeyboardMarkup ReminderDaysKeyboard() => SettingsOptions(
+    [
+        [InlineKeyboardButton.WithCallbackData("За 1 день", TelegramCallbackData.Setting("days", 1)), InlineKeyboardButton.WithCallbackData("За 3 дня", TelegramCallbackData.Setting("days", 3))],
+        [InlineKeyboardButton.WithCallbackData("За 7 дней", TelegramCallbackData.Setting("days", 7))]
+    ]);
 
-    public static InlineKeyboardMarkup ReminderTimeKeyboard() => new(new[]
-    {
-        new[] { InlineKeyboardButton.WithCallbackData("09:00", TelegramCallbackData.Setting("time", "09:00")), InlineKeyboardButton.WithCallbackData("12:00", TelegramCallbackData.Setting("time", "12:00")) },
-        new[] { InlineKeyboardButton.WithCallbackData("18:00", TelegramCallbackData.Setting("time", "18:00")) }
-    });
+    public static InlineKeyboardMarkup ReminderTimeKeyboard() => SettingsOptions(
+    [
+        [InlineKeyboardButton.WithCallbackData("09:00", TelegramCallbackData.Setting("time", "09:00")), InlineKeyboardButton.WithCallbackData("12:00", TelegramCallbackData.Setting("time", "12:00"))],
+        [InlineKeyboardButton.WithCallbackData("18:00", TelegramCallbackData.Setting("time", "18:00"))]
+    ]);
+
+    private static InlineKeyboardMarkup SettingsOptions(InlineKeyboardButton[][] rows) =>
+        new([.. rows, [InlineKeyboardButton.WithCallbackData("◀️ Назад", TelegramCallbackData.Setting("back"))]]);
+
+    public static InlineKeyboardMarkup CurrencyKeyboard() => SettingsOptions(
+    [
+        [InlineKeyboardButton.WithCallbackData("Российский рубль (RUB)", TelegramCallbackData.Setting("currency", "RUB"))],
+        [InlineKeyboardButton.WithCallbackData("Доллар США (USD)", TelegramCallbackData.Setting("currency", "USD"))],
+        [InlineKeyboardButton.WithCallbackData("Евро (EUR)", TelegramCallbackData.Setting("currency", "EUR"))]
+    ]);
 
     public static InlineKeyboardMarkup ReminderSnoozeKeyboard(Guid paymentId) => new(new[]
     {
         new[] { InlineKeyboardButton.WithCallbackData("Через час", TelegramCallbackData.ReminderSnooze(paymentId, "hour")) },
         new[] { InlineKeyboardButton.WithCallbackData("Сегодня вечером", TelegramCallbackData.ReminderSnooze(paymentId, "evening")) },
         new[] { InlineKeyboardButton.WithCallbackData("Завтра", TelegramCallbackData.ReminderSnooze(paymentId, "tomorrow")) }
-    });
-
-    public static InlineKeyboardMarkup CurrencyKeyboard() => new(new[]
-    {
-        new[] { InlineKeyboardButton.WithCallbackData("Российский рубль (RUB)", TelegramCallbackData.Setting("currency", "RUB")) },
-        new[] { InlineKeyboardButton.WithCallbackData("Доллар США (USD)", TelegramCallbackData.Setting("currency", "USD")) },
-        new[] { InlineKeyboardButton.WithCallbackData("Евро (EUR)", TelegramCallbackData.Setting("currency", "EUR")) }
     });
 
     public static ReplyKeyboardMarkup MainMenuKeyboard(bool isAdmin = false)
@@ -77,13 +92,13 @@ internal static class TelegramUi
     public static string FormatPaymentCard(PaymentListItem payment, DateOnly today) =>
         $"{PaymentDisplayNames.PaymentMethodIcon(payment.PaymentMethod)}{(payment.IsAutoDebit ? " 🤖" : string.Empty)} {payment.Name}\n\n" +
         $"{TelegramPresentation.Money(payment.Amount, payment.Currency)} · " +
-        $"{TelegramPresentation.Schedule(payment.RecurrenceInterval, payment.RecurrenceUnit, payment.DueDate, today)}\n" +
+        $"{TelegramPresentation.Schedule(payment.RecurrenceInterval, payment.RecurrenceUnit, payment.DueDate, payment.ScheduleDayOfMonth, payment.IsLastDayOfMonth)}\n" +
         $"Следующий платеж: {TelegramPresentation.Date(payment.DueDate, today)}";
 
     public static string FormatUpcomingCard(UpcomingPaymentItem payment, DateOnly today) =>
         $"{(payment.IsOverdue ? "⚠️" : PaymentDisplayNames.PaymentMethodIcon(payment.PaymentMethod))} {payment.Name}\n\n" +
         $"{TelegramPresentation.Money(payment.Amount, payment.Currency)} · " +
-        $"{TelegramPresentation.Schedule(payment.RecurrenceInterval, payment.RecurrenceUnit, payment.DueDate, today)}\n" +
+        $"{TelegramPresentation.Schedule(payment.RecurrenceInterval, payment.RecurrenceUnit, payment.DueDate, payment.ScheduleDayOfMonth, payment.IsLastDayOfMonth)}\n" +
         (payment.IsOverdue
             ? $"Срок был {TelegramPresentation.Date(payment.DueDate, today)}"
             : payment.DaysFromToday switch
@@ -96,7 +111,7 @@ internal static class TelegramUi
     public static InlineKeyboardMarkup PaymentActionKeyboard(IReadOnlyList<PaymentListItem> payments, string action) =>
         new(payments.Select(payment => new[]
         {
-            InlineKeyboardButton.WithCallbackData($"{ActionLabel(action)}: {payment.Name} — {payment.Amount:0.##} {payment.Currency}", TelegramCallbackData.Payment(action, payment.Id))
+            InlineKeyboardButton.WithCallbackData($"{ActionLabel(action)}: {payment.Name} — {TelegramPresentation.Money(payment.Amount, payment.Currency)}", TelegramCallbackData.Payment(action, payment.Id))
         }));
 
     public static InlineKeyboardMarkup PaymentCardKeyboard(Guid paymentId) => new(new[]
@@ -148,18 +163,14 @@ internal static class TelegramUi
 
     public static string FormatStatistics(int year, int month, IReadOnlyList<MonthlyStatisticsCurrency> statistics)
     {
+        var title = $"📊 {Russian.TextInfo.ToTitleCase(new DateOnly(year, month, 1).ToString("MMMM yyyy", Russian))}";
         if (statistics.Count == 0)
-            return $"Статистика за {year:D4}-{month:D2}: платежей и оплат нет.";
+            return $"{title}\n\nПлатежей и оплат нет.";
 
-        var title = new DateOnly(year, month, 1).ToDateTime(TimeOnly.MinValue)
-            .ToString("MMMM yyyy", System.Globalization.CultureInfo.GetCultureInfo("ru-RU"));
-        var lines = statistics.Select(x =>
-            $"📊 {title}\n\n" +
-            $"Запланировано: {TelegramPresentation.Money(x.PlannedAmount, x.Currency)}\n" +
-            $"✅ Оплачено: {TelegramPresentation.Money(x.PaidAmount, x.Currency)}\n" +
-            $"⏳ Осталось: {TelegramPresentation.Money(x.RemainingAmount, x.Currency)}\n\n" +
-            (x.UnpaidCount == 0 ? "Все платежи оплачены 🎉" : $"Не оплачено платежей: {x.UnpaidCount}"));
-        return string.Join("\n\n", lines);
+        var blocks = statistics.Select(x =>
+            $"{FormatStatisticsAmounts(x.Currency, x.PlannedAmount, x.PaidAmount, x.RemainingAmount)}\n" +
+            (x.UnpaidCount == 0 ? "Все платежи оплачены" : $"Не оплачено платежей: {x.UnpaidCount}"));
+        return $"{title}\n\n{string.Join("\n\n", blocks)}";
     }
 
     public static string FormatStatistics(int year, int month, IReadOnlyList<MonthlyStatisticsCurrency> monthly,
@@ -169,15 +180,16 @@ internal static class TelegramUi
         if (annual.Count == 0)
             return monthlyText;
 
-        var annualTitle = $"📅 {year} год";
-        var annualLines = annual.Select(x =>
-            $"{annualTitle}\n\n" +
-            $"Запланировано: {TelegramPresentation.Money(x.PlannedAmount, x.Currency)}\n" +
-            $"✅ Оплачено: {TelegramPresentation.Money(x.PaidAmount, x.Currency)}\n" +
-            $"⏳ Осталось: {TelegramPresentation.Money(x.RemainingAmount, x.Currency)}\n" +
+        var annualBlocks = annual.Select(x =>
+            $"{FormatStatisticsAmounts(x.Currency, x.PlannedAmount, x.PaidAmount, x.RemainingAmount)}\n" +
             $"Платежей: оплачено {x.PaidCount} из {x.PlannedCount}");
-        return monthlyText + "\n\n" + string.Join("\n\n", annualLines);
+        return $"{monthlyText}\n\n📅 {year} год\n\n{string.Join("\n\n", annualBlocks)}";
     }
+
+    private static string FormatStatisticsAmounts(string currency, decimal planned, decimal paid, decimal remaining) =>
+        $"Запланировано: {TelegramPresentation.Money(planned, currency)}\n" +
+        $"Оплачено: {TelegramPresentation.Money(paid, currency)}\n" +
+        $"Осталось: {TelegramPresentation.Money(remaining, currency)}";
 
     public static string? GetCommand(string text) => text.Trim() switch
     {

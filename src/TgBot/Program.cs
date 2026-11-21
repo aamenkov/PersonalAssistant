@@ -357,7 +357,8 @@ internal sealed class TelegramPollingService(
                 if (details is not null && update.CallbackQuery.Message is { } message)
                 {
                     var item = new PaymentListItem(details.Id, details.Name, details.Amount, details.Currency, details.NextPaymentDate,
-                        details.RecurrenceInterval, details.RecurrenceUnit, details.PaymentMethod, details.IsAutoDebit);
+                        details.RecurrenceInterval, details.RecurrenceUnit, details.PaymentMethod, details.IsAutoDebit,
+                        details.ScheduleDayOfMonth, details.IsLastDayOfMonth);
                     await client.SendMessage(message.Chat.Id, TelegramUi.FormatPaymentCard(item, LocalDate(user.TimeZoneId)),
                         replyMarkup: TelegramUi.PaymentCardKeyboard(paymentId), cancellationToken: cancellationToken);
                 }
@@ -447,7 +448,9 @@ internal sealed class TelegramPollingService(
 
         if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery?.Data is { } callbackData && callbackData.StartsWith(TelegramCallbackData.TimeZonePrefix, StringComparison.Ordinal))
         {
-            var timeZoneId = callbackData[TelegramCallbackData.TimeZonePrefix.Length..];
+            var fromSettings = callbackData.StartsWith(TelegramCallbackData.SettingsTimeZonePrefix, StringComparison.Ordinal);
+            var prefix = fromSettings ? TelegramCallbackData.SettingsTimeZonePrefix : TelegramCallbackData.TimeZonePrefix;
+            var timeZoneId = callbackData[prefix.Length..];
             using var scope = scopeFactory.CreateScope();
             if (timeZoneId == "custom")
             {
@@ -473,7 +476,12 @@ internal sealed class TelegramPollingService(
                 await timeZones.SetAsync(update.CallbackQuery.From.Id, timeZoneId, cancellationToken);
                 await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Часовой пояс сохранен", cancellationToken: cancellationToken);
                 if (update.CallbackQuery.Message is { } callbackMessage)
-                    await client.SendMessage(callbackMessage.Chat.Id, $"Готово. Часовой пояс: {TelegramPresentation.TimeZone(timeZoneId)}.", replyMarkup: TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
+                {
+                    if (fromSettings)
+                        await RefreshSettingsAsync(client, update.CallbackQuery, scope.ServiceProvider.GetRequiredService<UserSettingsService>(), cancellationToken);
+                    else
+                        await client.SendMessage(callbackMessage.Chat.Id, $"Готово. Часовой пояс: {TelegramPresentation.TimeZone(timeZoneId)}.", replyMarkup: TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(update.CallbackQuery.From.Id)), cancellationToken: cancellationToken);
+                }
             }
             catch (Exception exception) when (exception is TimeZoneNotFoundException or InvalidTimeZoneException)
             {
@@ -494,11 +502,23 @@ internal sealed class TelegramPollingService(
             var settings = scope.ServiceProvider.GetRequiredService<UserSettingsService>();
             try
             {
-                if (parts[1] == "timezone")
+                if (parts[1] == "back")
                 {
                     await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
+                    await RefreshSettingsAsync(client, update.CallbackQuery, settings, cancellationToken);
+                }
+                else if (parts[1] == "timezone")
+                {
+                    var user = await settings.FindAsync(update.CallbackQuery.From.Id, cancellationToken)
+                        ?? throw new InvalidOperationException("User is not registered.");
+                    await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
                     if (update.CallbackQuery.Message is { } message)
-                        await client.SendMessage(message.Chat.Id, "Выберите часовой пояс. Его можно изменить в любой момент:", replyMarkup: TimeZoneKeyboard(), cancellationToken: cancellationToken);
+                    {
+                        if (user.IsTimeZoneConfigured)
+                            await UpdateSettingsMessageAsync(client, message, "Выберите часовой пояс:", TelegramUi.TimeZoneKeyboard(fromSettings: true), cancellationToken);
+                        else
+                            await client.SendMessage(message.Chat.Id, "Выберите часовой пояс:", replyMarkup: TelegramUi.TimeZoneKeyboard(), cancellationToken: cancellationToken);
+                    }
                 }
                 else if (parts[1] == "currency" && parts.Length == 3)
                 {
@@ -506,23 +526,19 @@ internal sealed class TelegramPollingService(
                     {
                         await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
                         if (update.CallbackQuery.Message is { } message)
-                            await client.SendMessage(message.Chat.Id, "Выберите валюту по умолчанию:", replyMarkup: CurrencyKeyboard(), cancellationToken: cancellationToken);
+                            await UpdateSettingsMessageAsync(client, message, "Выберите валюту по умолчанию:", TelegramUi.CurrencyKeyboard(), cancellationToken);
                         return;
                     }
 
                     await settings.SetDefaultCurrencyAsync(update.CallbackQuery.From.Id, parts[2], cancellationToken);
                     await client.AnswerCallbackQuery(update.CallbackQuery.Id, $"Валюта по умолчанию: {parts[2]}", cancellationToken: cancellationToken);
-                    if (update.CallbackQuery.Message is { } currencyMessage)
-                    {
-                        var updatedUser = await settings.FindAsync(update.CallbackQuery.From.Id, cancellationToken);
-                        await client.SendMessage(currencyMessage.Chat.Id, "Настройка сохранена.", replyMarkup: SettingsKeyboard(updatedUser?.DefaultCurrency ?? parts[2]), cancellationToken: cancellationToken);
-                    }
+                    await RefreshSettingsAsync(client, update.CallbackQuery, settings, cancellationToken);
                 }
                 else if (parts[1] == "days" && parts.Length == 3 && parts[2] == "menu")
                 {
                     await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
                     if (update.CallbackQuery.Message is { } message)
-                        await client.SendMessage(message.Chat.Id, "Выберите, за сколько дней напоминать:", replyMarkup: ReminderDaysKeyboard(), cancellationToken: cancellationToken);
+                        await UpdateSettingsMessageAsync(client, message, "Выберите, за сколько дней напоминать:", TelegramUi.ReminderDaysKeyboard(), cancellationToken);
                     return;
                 }
                 else if (parts[1] == "days" && parts.Length == 3 && int.TryParse(parts[2], out var days))
@@ -530,29 +546,21 @@ internal sealed class TelegramPollingService(
                     var user = await settings.FindAsync(update.CallbackQuery.From.Id, cancellationToken)
                         ?? throw new InvalidOperationException("User is not registered.");
                     await settings.SetReminderSettingsAsync(update.CallbackQuery.From.Id, user.ReminderTimeLocal, days, cancellationToken);
-                    await client.AnswerCallbackQuery(update.CallbackQuery.Id, $"Напоминание за {days} дн.", cancellationToken: cancellationToken);
-                    if (update.CallbackQuery.Message is { } daysMessage)
-                    {
-                        var updatedUser = await settings.FindAsync(update.CallbackQuery.From.Id, cancellationToken);
-                        await client.SendMessage(daysMessage.Chat.Id, "Настройка сохранена.", replyMarkup: SettingsKeyboard(updatedUser?.DefaultCurrency ?? "RUB"), cancellationToken: cancellationToken);
-                    }
+                    await client.AnswerCallbackQuery(update.CallbackQuery.Id, $"Напоминать за {TelegramPresentation.DaysCount(days)}", cancellationToken: cancellationToken);
+                    await RefreshSettingsAsync(client, update.CallbackQuery, settings, cancellationToken);
                 }
                 else if (parts[1] == "time" && parts.Length == 3 && parts[2] == "menu")
                 {
                     await client.AnswerCallbackQuery(update.CallbackQuery.Id, cancellationToken: cancellationToken);
                     if (update.CallbackQuery.Message is { } message)
-                        await client.SendMessage(message.Chat.Id, "Выберите время напоминаний:", replyMarkup: ReminderTimeKeyboard(), cancellationToken: cancellationToken);
+                        await UpdateSettingsMessageAsync(client, message, "Выберите время напоминаний:", TelegramUi.ReminderTimeKeyboard(), cancellationToken);
                     return;
                 }
                 else if (parts[1] == "time" && parts.Length == 4 && TimeOnly.TryParse($"{parts[2]}:{parts[3]}", out var reminderTime))
                 {
                     await settings.SetReminderTimeAsync(update.CallbackQuery.From.Id, reminderTime, cancellationToken);
-                    await client.AnswerCallbackQuery(update.CallbackQuery.Id, $"Время напоминаний: {reminderTime:HH\\:mm}", cancellationToken: cancellationToken);
-                    if (update.CallbackQuery.Message is { } timeMessage)
-                    {
-                        var updatedUser = await settings.FindAsync(update.CallbackQuery.From.Id, cancellationToken);
-                        await client.SendMessage(timeMessage.Chat.Id, "Настройка сохранена.", replyMarkup: SettingsKeyboard(updatedUser?.DefaultCurrency ?? "RUB"), cancellationToken: cancellationToken);
-                    }
+                    await client.AnswerCallbackQuery(update.CallbackQuery.Id, $"Время напоминаний: {reminderTime:HH:mm}", cancellationToken: cancellationToken);
+                    await RefreshSettingsAsync(client, update.CallbackQuery, settings, cancellationToken);
                 }
             }
             catch (InvalidOperationException)
@@ -580,14 +588,14 @@ internal sealed class TelegramPollingService(
                 var summary = first is null
                     ? "На ближайшие 7 дней платить ничего не нужно 👍"
                     : first.IsOverdue
-                        ? $"⚠️ Есть просроченный платеж:\n\n{TelegramUi.FormatUpcomingCard(first, today)}"
+                        ? $"Просроченный платеж:\n\n{TelegramUi.FormatUpcomingCard(first, today)}"
                         : $"Ближайший платеж:\n\n{TelegramUi.FormatUpcomingCard(first, today)}";
                 await client.SendMessage(update.Message.Chat.Id, $"С возвращением 👋\n\n{summary}", replyMarkup: TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(from.Id)), cancellationToken: cancellationToken);
             }
             else
                 await client.SendMessage(update.Message.Chat.Id,
                     "Добро пожаловать в PersonalAssistant!\n\nЧтобы напоминания приходили по вашему местному времени, выберите часовой пояс. Его можно изменить позже в настройках:",
-                    replyMarkup: TimeZoneKeyboard(), cancellationToken: cancellationToken);
+                    replyMarkup: TelegramUi.TimeZoneKeyboard(), cancellationToken: cancellationToken);
         }
         else if (command == "/add")
         {
@@ -619,11 +627,10 @@ internal sealed class TelegramPollingService(
             var items = await payments.GetUpcomingAsync(user.Id, today, 6, cancellationToken);
             if (items.Count == 0)
             {
-                await client.SendMessage(update.Message.Chat.Id, "💳 Ближайшие платежи\n\nНа ближайшие 7 дней платить ничего не нужно 👍", replyMarkup: TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(from.Id)), cancellationToken: cancellationToken);
+                await client.SendMessage(update.Message.Chat.Id, "На ближайшие 7 дней платежей нет 👍", replyMarkup: TelegramUi.MainMenuKeyboard(adminPolicy.IsAdmin(from.Id)), cancellationToken: cancellationToken);
                 return;
             }
 
-            await client.SendMessage(update.Message.Chat.Id, "💳 Ближайшие платежи", cancellationToken: cancellationToken);
             foreach (var item in items)
                 await client.SendMessage(update.Message.Chat.Id, TelegramUi.FormatUpcomingCard(item, today),
                     replyMarkup: TelegramUi.PaymentCardKeyboard(item.Id), cancellationToken: cancellationToken);
@@ -648,7 +655,6 @@ internal sealed class TelegramPollingService(
             }
 
             var today = LocalDate(user.TimeZoneId);
-            await client.SendMessage(update.Message.Chat.Id, $"📋 Активные платежи — {items.Count}", cancellationToken: cancellationToken);
             foreach (var item in items)
                 await client.SendMessage(update.Message.Chat.Id, TelegramUi.FormatPaymentCard(item, today),
                     replyMarkup: TelegramUi.PaymentCardKeyboard(item.Id), cancellationToken: cancellationToken);
@@ -750,8 +756,8 @@ internal sealed class TelegramPollingService(
             }
 
             await client.SendMessage(update.Message.Chat.Id,
-                $"⚙️ Настройки\n\nЧасовой пояс: {TelegramPresentation.TimeZone(user.TimeZoneId)}\nВалюта: {user.DefaultCurrency}\nПредварительное напоминание: за {TelegramPresentation.DaysCount(user.ReminderDaysBefore)}\nВремя: {user.ReminderTimeLocal:HH\\:mm}\n\nВыберите параметр для изменения:",
-                replyMarkup: SettingsKeyboard(user.DefaultCurrency, user.TimeZoneId, user.ReminderDaysBefore, user.ReminderTimeLocal), cancellationToken: cancellationToken);
+                TelegramUi.FormatSettings(user),
+                replyMarkup: TelegramUi.SettingsKeyboard(), cancellationToken: cancellationToken);
         }
         else if (command == "/help")
         {
@@ -794,15 +800,40 @@ internal sealed class TelegramPollingService(
         return Task.CompletedTask;
     }
 
-    private static InlineKeyboardMarkup TimeZoneKeyboard() => TelegramUi.TimeZoneKeyboard();
+    private static async Task RefreshSettingsAsync(ITelegramBotClient client, CallbackQuery callback,
+        UserSettingsService settings, CancellationToken cancellationToken)
+    {
+        if (callback.Message is not { } message)
+            return;
 
-    private static InlineKeyboardMarkup SettingsKeyboard(string currency, string timeZoneId = "UTC", int reminderDays = 3, TimeOnly? reminderTime = null) => TelegramUi.SettingsKeyboard(currency, timeZoneId, reminderDays, reminderTime);
+        var user = await settings.FindAsync(callback.From.Id, cancellationToken);
+        if (user is null)
+        {
+            await client.SendMessage(message.Chat.Id, "Сначала выполните /start.", cancellationToken: cancellationToken);
+            return;
+        }
 
-    private static InlineKeyboardMarkup ReminderDaysKeyboard() => TelegramUi.ReminderDaysKeyboard();
+        await UpdateSettingsMessageAsync(client, message, TelegramUi.FormatSettings(user), TelegramUi.SettingsKeyboard(), cancellationToken);
+    }
 
-    private static InlineKeyboardMarkup ReminderTimeKeyboard() => TelegramUi.ReminderTimeKeyboard();
-
-    private static InlineKeyboardMarkup CurrencyKeyboard() => TelegramUi.CurrencyKeyboard();
+    private static async Task UpdateSettingsMessageAsync(ITelegramBotClient client, Message message, string text,
+        InlineKeyboardMarkup keyboard, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await client.EditMessageText(message.Chat.Id, message.Id, text, replyMarkup: keyboard, cancellationToken: cancellationToken);
+        }
+        catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("message is not modified", StringComparison.OrdinalIgnoreCase))
+        {
+            // Telegram already shows the requested text and buttons.
+        }
+        catch (ApiRequestException ex) when (ex.ErrorCode == 400 &&
+            (ex.Message.Contains("message can't be edited", StringComparison.OrdinalIgnoreCase) ||
+             ex.Message.Contains("message to edit not found", StringComparison.OrdinalIgnoreCase)))
+        {
+            await client.SendMessage(message.Chat.Id, text, replyMarkup: keyboard, cancellationToken: cancellationToken);
+        }
+    }
 
     private static DateOnly LocalDate(string timeZoneId) => TelegramUi.LocalDate(timeZoneId);
 

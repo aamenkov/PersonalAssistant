@@ -10,13 +10,14 @@ internal static class TelegramPresentation
 
     public static string Money(decimal amount, string currency)
     {
-        var value = amount.ToString("#,##0.##", Russian).Replace('\u00A0', ' ');
-        return currency.ToUpperInvariant() switch
+        var value = amount.ToString("#,##0.00", Russian).Replace('\u00A0', ' ').Replace('\u202F', ' ');
+        var code = currency.ToUpperInvariant();
+        return code switch
         {
             "RUB" => $"{value} ₽",
             "USD" => $"{value} $",
             "EUR" => $"{value} €",
-            _ => $"{value} {currency.ToUpperInvariant()}"
+            _ => $"{value} {code}"
         };
     }
 
@@ -48,15 +49,16 @@ internal static class TelegramPresentation
             ? "дня"
             : "дней";
 
-    public static string Schedule(int interval, RecurrenceUnit unit, DateOnly nextDate, DateOnly today)
+    public static string Schedule(int interval, RecurrenceUnit unit, DateOnly nextDate, int scheduledDay, bool isLastDayOfMonth)
     {
         var recurrence = PaymentDisplayNames.Recurrence(interval, unit);
         return unit switch
         {
-            RecurrenceUnit.Once => "Разовый платеж",
             RecurrenceUnit.Week => $"{recurrence} по {Weekday(nextDate.DayOfWeek)}",
-            RecurrenceUnit.Year => $"{recurrence} {nextDate.Day} {nextDate.ToString("MMMM", Russian)}",
-            _ => $"{recurrence}, {nextDate.Day} числа"
+            RecurrenceUnit.Year => $"{recurrence} {scheduledDay} {Russian.DateTimeFormat.MonthGenitiveNames[nextDate.Month - 1]}",
+            RecurrenceUnit.Month when isLastDayOfMonth => $"{recurrence}, в последний день месяца",
+            RecurrenceUnit.Month => $"{recurrence}, {scheduledDay} числа",
+            _ => recurrence
         };
     }
 
@@ -77,7 +79,9 @@ internal static class TelegramPresentation
         {
             var zone = TimeZoneResolver.Resolve(timeZoneId);
             var offset = zone.GetUtcOffset(DateTime.UtcNow);
-            var hours = offset.TotalHours >= 0 ? $"+{offset.TotalHours:0}" : $"{offset.TotalHours:0}";
+            var absolute = offset.Duration();
+            var sign = offset < TimeSpan.Zero ? "-" : "+";
+            var utcOffset = absolute.Minutes == 0 ? $"UTC{sign}{absolute.Hours}" : $"UTC{sign}{absolute.Hours}:{absolute.Minutes:00}";
             var name = timeZoneId switch
             {
                 "Europe/Moscow" => "Москва",
@@ -89,7 +93,7 @@ internal static class TelegramPresentation
                 _ when TimeZoneResolver.TryParseFixedOffset(timeZoneId, out _) => "Ваш регион",
                 _ => timeZoneId
             };
-            return $"{name} · UTC{hours}";
+            return timeZoneId == "UTC" ? utcOffset : $"{name} ({utcOffset})";
         }
         catch (TimeZoneNotFoundException)
         {

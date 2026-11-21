@@ -4,13 +4,15 @@ internal static class TelegramCallbackData
 {
     public const string PaymentPrefix = "payment:";
     public const string TimeZonePrefix = "timezone:";
+    public const string SettingsTimeZonePrefix = TimeZonePrefix + "settings:";
     public const string SettingsPrefix = "settings:";
     public const string EditPrefix = "edit:";
     public const string ReminderPrefix = "reminder:";
     public const string AdminPrefix = "admin:";
 
     public static string Payment(string action, Guid paymentId) => $"{PaymentPrefix}{action}:{paymentId}";
-    public static string TimeZone(string timeZoneId) => $"{TimeZonePrefix}{timeZoneId}";
+    public static string TimeZone(string timeZoneId, bool fromSettings = false) =>
+        $"{(fromSettings ? SettingsTimeZonePrefix : TimeZonePrefix)}{timeZoneId}";
     public static string Setting(string name) => $"{SettingsPrefix}{name}";
     public static string Setting(string name, object value) => $"{SettingsPrefix}{name}:{value}";
     public static string EditField(string field, Guid paymentId) => $"{EditPrefix}{field}:{paymentId}";
