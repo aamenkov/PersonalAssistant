@@ -13,7 +13,6 @@ public interface IPaymentRepository
     Task<IReadOnlyList<PaymentTransaction>> GetTransactionsForOwnerAsync(Guid userId, Guid? paymentId, DateOnly? from, DateOnly? to, CancellationToken cancellationToken);
     Task<bool> HasTransactionForPeriodAsync(Guid userId, Guid paymentId, string paidPeriod, CancellationToken cancellationToken);
     Task SaveChangesAsync(CancellationToken cancellationToken);
-    Task<IReadOnlyList<ReminderCandidate>> GetReminderCandidatesAsync(CancellationToken cancellationToken);
     Task<int> ClearTransactionHistoryAsync(Guid userId, CancellationToken cancellationToken);
     Task<int> DeleteAllPaymentsAsync(Guid userId, CancellationToken cancellationToken);
 }

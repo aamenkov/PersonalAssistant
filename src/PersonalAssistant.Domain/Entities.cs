@@ -28,6 +28,11 @@ public sealed class User
     public bool IsTimeZoneConfigured { get; private set; }
     public TimeOnly ReminderTimeLocal { get; private set; }
     public int ReminderDaysBefore { get; private set; }
+    public ReminderMode ReminderMode { get; private set; } = ReminderMode.Ordinary;
+    public OverdueMode ReminderOverdueMode { get; private set; } = OverdueMode.Daily;
+    public int? CriticalIntervalMinutes { get; private set; }
+    public TimeOnly? CriticalWindowStart { get; private set; }
+    public TimeOnly? CriticalWindowEnd { get; private set; }
     public DateTime CreatedAtUtc { get; private set; }
     public DateTime UpdatedAtUtc { get; private set; }
     public ICollection<RecurringPayment> Payments { get; private set; } = new List<RecurringPayment>();
@@ -59,11 +64,25 @@ public sealed class User
 
     public void SetReminderSettings(TimeOnly reminderTimeLocal, int reminderDaysBefore, DateTime updatedAtUtc)
     {
-        if (reminderDaysBefore is < 0 or > 30)
-            throw new ArgumentOutOfRangeException(nameof(reminderDaysBefore));
+        if (ReminderMode != ReminderMode.Ordinary)
+            throw new InvalidOperationException("Legacy reminder settings only apply to ordinary mode.");
 
-        ReminderTimeLocal = reminderTimeLocal;
-        ReminderDaysBefore = reminderDaysBefore;
+        SetReminderProfile(new ReminderProfile(ReminderMode.Ordinary, reminderDaysBefore, reminderTimeLocal, ReminderOverdueMode), updatedAtUtc);
+    }
+
+    public ReminderProfile GetReminderProfile() =>
+        new(ReminderMode, ReminderDaysBefore, ReminderTimeLocal, ReminderOverdueMode,
+            CriticalIntervalMinutes, CriticalWindowStart, CriticalWindowEnd);
+
+    public void SetReminderProfile(ReminderProfile profile, DateTime updatedAtUtc)
+    {
+        ReminderMode = profile.Mode;
+        ReminderDaysBefore = profile.DaysBefore;
+        ReminderTimeLocal = profile.ReminderTimeLocal;
+        ReminderOverdueMode = profile.OverdueMode;
+        CriticalIntervalMinutes = profile.CriticalIntervalMinutes;
+        CriticalWindowStart = profile.CriticalWindowStart;
+        CriticalWindowEnd = profile.CriticalWindowEnd;
         UpdatedAtUtc = updatedAtUtc;
     }
 }
@@ -130,6 +149,20 @@ public sealed class RecurringPayment
     public DateTime UpdatedAtUtc { get; private set; }
     public ICollection<PaymentTransaction> Transactions { get; private set; } = new List<PaymentTransaction>();
     public ICollection<Reminder> Reminders { get; private set; } = new List<Reminder>();
+    public PaymentReminderSettings? ReminderSettings { get; private set; }
+
+    public void SetReminderProfile(ReminderProfile profile) =>
+        ApplyReminderOverride(profile);
+
+    public void DisableReminders() => ApplyReminderOverride(null);
+
+    public void UseUserReminderProfile() => ReminderSettings = null;
+
+    private void ApplyReminderOverride(ReminderProfile? profile)
+    {
+        ReminderSettings ??= new PaymentReminderSettings(Id);
+        ReminderSettings.SetProfile(profile);
+    }
 
     public void UpdateDetails(
         string name,
@@ -236,14 +269,20 @@ public sealed class Reminder
 {
     private Reminder() { }
 
-    public static Reminder Create(Guid recurringPaymentId, DateOnly dueDate, DateOnly localDate, ReminderKind kind, DateTime sentAtUtc) => new()
-    {
-        RecurringPaymentId = recurringPaymentId,
-        DueDate = dueDate,
-        LocalDate = localDate,
-        Kind = kind,
-        SentAtUtc = sentAtUtc
-    };
+    public static Reminder Reserve(Guid recurringPaymentId, DateOnly dueDate, DateOnly localDate, ReminderKind kind,
+        string slotKey, DateTime scheduledAtUtc, DateTime claimedAtUtc, DateTime leaseUntilUtc) => new()
+        {
+            RecurringPaymentId = recurringPaymentId,
+            DueDate = dueDate,
+            LocalDate = localDate,
+            Kind = kind,
+            SlotKey = slotKey,
+            ScheduledAtUtc = scheduledAtUtc,
+            ClaimedAtUtc = claimedAtUtc,
+            LeaseUntilUtc = leaseUntilUtc,
+            ClaimToken = Guid.NewGuid(),
+            Status = ReminderDeliveryStatus.Reserved
+        };
 
     public Guid Id { get; private set; } = Guid.NewGuid();
     public Guid RecurringPaymentId { get; private set; }
@@ -251,20 +290,22 @@ public sealed class Reminder
     public DateOnly DueDate { get; private set; }
     public DateOnly LocalDate { get; private set; }
     public ReminderKind Kind { get; private set; }
-    public DateTime SentAtUtc { get; private set; }
+    public string SlotKey { get; private set; } = "daily";
+    public ReminderDeliveryStatus Status { get; private set; }
+    public DateTime? ScheduledAtUtc { get; private set; }
+    public DateTime ClaimedAtUtc { get; private set; }
+    public DateTime? LeaseUntilUtc { get; private set; }
+    public Guid? ClaimToken { get; private set; }
+    public DateTime? LastAttemptAtUtc { get; private set; }
+    public int AttemptCount { get; private set; }
+    public DateTime? NextAttemptAtUtc { get; private set; }
+    public DateTime? SentAtUtc { get; private set; }
+    public int? TelegramMessageId { get; private set; }
 }
 
 public sealed class ReminderSnooze
 {
     private ReminderSnooze() { }
-
-    public static ReminderSnooze Create(Guid recurringPaymentId, DateOnly dueDate, DateTime snoozedUntilUtc, DateTime createdAtUtc) => new()
-    {
-        RecurringPaymentId = recurringPaymentId,
-        DueDate = dueDate,
-        SnoozedUntilUtc = snoozedUntilUtc,
-        CreatedAtUtc = createdAtUtc
-    };
 
     public Guid Id { get; private set; } = Guid.NewGuid();
     public Guid RecurringPaymentId { get; private set; }
@@ -274,7 +315,6 @@ public sealed class ReminderSnooze
     public DateTime CreatedAtUtc { get; private set; }
     public DateTime? ConsumedAtUtc { get; private set; }
 
-    public void Consume(DateTime consumedAtUtc) => ConsumedAtUtc = consumedAtUtc;
 }
 
 public sealed class ConversationState

@@ -35,20 +35,32 @@ public sealed class UserSettingsService(IUserRepository users)
         await users.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task SetReminderSettingsAsync(long telegramUserId, TimeOnly reminderTimeLocal, int reminderDaysBefore, CancellationToken cancellationToken)
+    public async Task SetReminderProfileAsync(long telegramUserId, ReminderProfile profile, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(profile);
         var user = await users.FindByTelegramUserIdAsync(telegramUserId, cancellationToken)
             ?? throw new InvalidOperationException("User is not registered.");
-        user.SetReminderSettings(reminderTimeLocal, reminderDaysBefore, DateTime.UtcNow);
+        user.SetReminderProfile(profile, DateTime.UtcNow);
         await users.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task SetReminderTimeAsync(long telegramUserId, TimeOnly reminderTimeLocal, CancellationToken cancellationToken)
+    public Task<bool> TrySetReminderDaysAsync(long telegramUserId, int daysBefore, CancellationToken cancellationToken) =>
+        TryUpdateOrdinaryReminderAsync(telegramUserId, daysBefore, null, cancellationToken);
+
+    public Task<bool> TrySetReminderTimeAsync(long telegramUserId, TimeOnly reminderTimeLocal, CancellationToken cancellationToken) =>
+        TryUpdateOrdinaryReminderAsync(telegramUserId, null, reminderTimeLocal, cancellationToken);
+
+    private async Task<bool> TryUpdateOrdinaryReminderAsync(
+        long telegramUserId, int? daysBefore, TimeOnly? reminderTimeLocal, CancellationToken cancellationToken)
     {
         var user = await users.FindByTelegramUserIdAsync(telegramUserId, cancellationToken)
             ?? throw new InvalidOperationException("User is not registered.");
-        user.SetReminderSettings(reminderTimeLocal, user.ReminderDaysBefore, DateTime.UtcNow);
+        if (user.ReminderMode != ReminderMode.Ordinary)
+            return false;
+
+        user.SetReminderSettings(reminderTimeLocal ?? user.ReminderTimeLocal, daysBefore ?? user.ReminderDaysBefore, DateTime.UtcNow);
         await users.SaveChangesAsync(cancellationToken);
+        return true;
     }
 }
 

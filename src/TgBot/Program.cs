@@ -25,12 +25,15 @@ builder.Services.AddScoped<UserRegistrationService>();
 builder.Services.AddScoped<UserTimeZoneService>();
 builder.Services.AddScoped<TimeZoneConversationService>();
 builder.Services.AddScoped<UserSettingsService>();
+builder.Services.AddScoped<IPaymentReminderSettingsRepository, PaymentRepository>();
+builder.Services.AddScoped<PaymentReminderSettingsService>();
 builder.Services.AddScoped<AdminService>();
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddScoped<IReminderRepository, ReminderRepository>();
 builder.Services.AddScoped<ITelegramUpdateStore, TelegramUpdateStore>();
 builder.Services.AddScoped<ReminderService>();
 builder.Services.AddScoped<ReminderSnoozeService>();
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IConversationStateRepository, ConversationStateRepository>();
 builder.Services.AddScoped<PaymentService>();
 builder.Services.AddScoped<PaymentConversationService>();
@@ -50,6 +53,8 @@ var accessPolicy = BotAccessPolicy.Parse(builder.Configuration["Telegram:Allowed
 builder.Services.AddSingleton(accessPolicy);
 builder.Services.AddSingleton(BotAdminPolicy.Parse(configuredAdminId, accessPolicy));
 builder.Services.AddSingleton<ITelegramBotClient>(_ => new TelegramBotClient(botToken));
+builder.Services.AddKeyedSingleton<ITelegramBotClient>(ReminderBackgroundService.BotClientKey,
+    (_, _) => new TelegramBotClient(new TelegramBotClientOptions(botToken) { RetryCount = 0 }));
 builder.Services.AddHostedService<TelegramPollingService>();
 builder.Services.AddHostedService<ReminderBackgroundService>();
 
@@ -543,9 +548,11 @@ internal sealed class TelegramPollingService(
                 }
                 else if (parts[1] == "days" && parts.Length == 3 && int.TryParse(parts[2], out var days))
                 {
-                    var user = await settings.FindAsync(update.CallbackQuery.From.Id, cancellationToken)
-                        ?? throw new InvalidOperationException("User is not registered.");
-                    await settings.SetReminderSettingsAsync(update.CallbackQuery.From.Id, user.ReminderTimeLocal, days, cancellationToken);
+                    if (!await settings.TrySetReminderDaysAsync(update.CallbackQuery.From.Id, days, cancellationToken))
+                    {
+                        await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Эта настройка доступна для обычного режима.", showAlert: true, cancellationToken: cancellationToken);
+                        return;
+                    }
                     await client.AnswerCallbackQuery(update.CallbackQuery.Id, $"Напоминать за {TelegramPresentation.DaysCount(days)}", cancellationToken: cancellationToken);
                     await RefreshSettingsAsync(client, update.CallbackQuery, settings, cancellationToken);
                 }
@@ -558,7 +565,11 @@ internal sealed class TelegramPollingService(
                 }
                 else if (parts[1] == "time" && parts.Length == 4 && TimeOnly.TryParse($"{parts[2]}:{parts[3]}", out var reminderTime))
                 {
-                    await settings.SetReminderTimeAsync(update.CallbackQuery.From.Id, reminderTime, cancellationToken);
+                    if (!await settings.TrySetReminderTimeAsync(update.CallbackQuery.From.Id, reminderTime, cancellationToken))
+                    {
+                        await client.AnswerCallbackQuery(update.CallbackQuery.Id, "Эта настройка доступна для обычного режима.", showAlert: true, cancellationToken: cancellationToken);
+                        return;
+                    }
                     await client.AnswerCallbackQuery(update.CallbackQuery.Id, $"Время напоминаний: {reminderTime:HH:mm}", cancellationToken: cancellationToken);
                     await RefreshSettingsAsync(client, update.CallbackQuery, settings, cancellationToken);
                 }

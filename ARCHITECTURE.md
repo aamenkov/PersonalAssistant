@@ -39,6 +39,7 @@ classDiagram
     class PaymentEditConversationService
     class PaymentRecordConversationService
     class ReminderService
+    class ReminderScheduleCalculator
     class ReminderSnoozeService
     class UserRegistrationService
     class UserSettingsService
@@ -75,13 +76,12 @@ classDiagram
     TelegramPollingService --> UserUpdateGate
 
     ReminderBackgroundService --> ReminderService
-    ReminderBackgroundService --> ReminderSnoozeService
 
     PaymentConversationService --> PaymentService
     PaymentEditConversationService --> PaymentService
     PaymentRecordConversationService --> PaymentService
     PaymentService --> PaymentDateCalculator
-    ReminderService --> PaymentDateCalculator
+    ReminderService --> ReminderScheduleCalculator
     TimeZoneConversationService --> TimeZoneResolver
 
     UserRegistrationService --> UserRepository
@@ -154,7 +154,15 @@ Telegram UI разделяет глобальную навигацию и кон
 
 ## Напоминания и идемпотентность
 
-`ReminderBackgroundService` запускается раз в минуту. `ReminderService` выбирает активные платежи, вычисляет локальные даты и перед отправкой claims уникальный ключ `(PaymentId, DueDate, ReminderKind, LocalDate)` через `ReminderRepository`. Уникальный индекс и обработка конфликта защищают от повторной отправки несколькими экземплярами. Отложенное напоминание хранится отдельно в `ReminderSnooze`: его UTC-время рассчитывается через локальный часовой пояс пользователя, а после отправки snooze атомарно помечается потребленным.
+`ReminderProfile` задаёт режим и правила валидации уведомлений. Общий профиль собирается из полей `User`, поэтому существующие `ReminderDaysBefore` и `ReminderTimeLocal` остаются его источником. Связь с `PaymentReminderSettings` хранит полный индивидуальный профиль, а запись с пустым профилем выключает уведомления для платежа. Отсутствие записи означает наследование. `PaymentReminderSettingsService` ограничивает операции владельцем платежа.
+
+Чистый `ReminderScheduleCalculator` принимает срок, профиль, зону и интервал UTC. `ReminderService` выбирает последний актуальный слот за локальный день, затем пакетно отсекает занятые и уже обработанные слоты. Ключ `(PaymentId, DueDate, LocalDate, Kind, SlotKey)` различает основное событие дня и критические повторы по запланированному местному времени. Если последний слот уже обработан, более ранние слоты пропускаются. Обычное уведомление остаётся актуальным до полуночи. Для критических повторов рассылка останавливается по окончании последней минуты активного окна.
+
+`ReminderBackgroundService` создаёт scope на каждый минутный проход. `ReminderRepository` использует уникальный ключ, короткие транзакции с блокировкой по платежу и токен резервирования. Перед попыткой сервис заново проверяет актуальность платежа, оплаты, профиля и отсрочки. Telegram вызывается после завершения транзакции. Результат сохраняется отдельно от резервирования. При подтверждённом `429` допускаются до трёх попыток всего с учётом `retry_after` и актуальности слота. Неопределённый результат не повторяется.
+
+`ReminderSnooze` хранит один UTC-срок на платёжный период. Атомарный перенос меняет ID отсрочки, чтобы прежний захват не мог завершить новую. Пока отсрочка не обработана, она заменяет автоматический график. После завершения пропущенные слоты до этого момента отбрасываются. Явная отсрочка может сработать вне критического окна. Существующие кнопки Telegram используют прежний формат. Защита от действий со старыми сообщениями другого срока остаётся в TD-011.
+
+Миграция доставки переносит прежний `SentAtUtc` в `ClaimedAtUtc`. Такие строки получают `HistoricalUnknown` и сохраняют старый дневной ключ. Откат схемы доставки напрямую допустим, пока нет новых записей учёта доставки. При обновлении сначала останавливаются все экземпляры старого worker-а.
 
 ## Ошибки и логирование
 

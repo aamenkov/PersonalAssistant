@@ -52,6 +52,16 @@ namespace PersonalAssistant.Infrastructure.Migrations
                     b.ToTable("ConversationStates");
                 });
 
+            modelBuilder.Entity("PersonalAssistant.Domain.PaymentReminderSettings", b =>
+                {
+                    b.Property<Guid>("RecurringPaymentId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("RecurringPaymentId");
+
+                    b.ToTable("PaymentReminderSettings");
+                });
+
             modelBuilder.Entity("PersonalAssistant.Domain.PaymentTransaction", b =>
                 {
                     b.Property<Guid>("Id")
@@ -165,24 +175,62 @@ namespace PersonalAssistant.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid?>("ClaimToken")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("ClaimedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateOnly>("DueDate")
                         .HasColumnType("date");
 
                     b.Property<int>("Kind")
                         .HasColumnType("integer");
 
+                    b.Property<DateTime?>("LastAttemptAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("LeaseUntilUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateOnly>("LocalDate")
                         .HasColumnType("date");
+
+                    b.Property<DateTime?>("NextAttemptAtUtc")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("RecurringPaymentId")
                         .HasColumnType("uuid");
 
-                    b.Property<DateTime>("SentAtUtc")
+                    b.Property<DateTime?>("ScheduledAtUtc")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("SentAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("SlotKey")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(48)
+                        .HasColumnType("character varying(48)")
+                        .HasDefaultValue("daily");
+
+                    b.Property<int>("Status")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.Property<int?>("TelegramMessageId")
+                        .HasColumnType("integer");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("RecurringPaymentId", "DueDate", "LocalDate", "Kind")
+                    b.HasIndex("Status", "LeaseUntilUtc");
+
+                    b.HasIndex("RecurringPaymentId", "DueDate", "LocalDate", "Kind", "SlotKey")
                         .IsUnique();
 
                     b.ToTable("Reminders");
@@ -226,6 +274,15 @@ namespace PersonalAssistant.Infrastructure.Migrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int?>("CriticalIntervalMinutes")
+                        .HasColumnType("integer");
+
+                    b.Property<TimeOnly?>("CriticalWindowEnd")
+                        .HasColumnType("time without time zone");
+
+                    b.Property<TimeOnly?>("CriticalWindowStart")
+                        .HasColumnType("time without time zone");
+
                     b.Property<string>("DefaultCurrency")
                         .IsRequired()
                         .HasMaxLength(3)
@@ -239,6 +296,16 @@ namespace PersonalAssistant.Infrastructure.Migrations
 
                     b.Property<int>("ReminderDaysBefore")
                         .HasColumnType("integer");
+
+                    b.Property<int>("ReminderMode")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.Property<int>("ReminderOverdueMode")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
 
                     b.Property<TimeOnly>("ReminderTimeLocal")
                         .HasColumnType("time without time zone");
@@ -295,6 +362,51 @@ namespace PersonalAssistant.Infrastructure.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("PersonalAssistant.Domain.PaymentReminderSettings", b =>
+                {
+                    b.HasOne("PersonalAssistant.Domain.RecurringPayment", null)
+                        .WithOne("ReminderSettings")
+                        .HasForeignKey("PersonalAssistant.Domain.PaymentReminderSettings", "RecurringPaymentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.OwnsOne("PersonalAssistant.Domain.ReminderProfile", "Profile", b1 =>
+                        {
+                            b1.Property<Guid>("PaymentReminderSettingsRecurringPaymentId")
+                                .HasColumnType("uuid");
+
+                            b1.Property<int?>("CriticalIntervalMinutes")
+                                .HasColumnType("integer");
+
+                            b1.Property<TimeOnly?>("CriticalWindowEnd")
+                                .HasColumnType("time without time zone");
+
+                            b1.Property<TimeOnly?>("CriticalWindowStart")
+                                .HasColumnType("time without time zone");
+
+                            b1.Property<int>("DaysBefore")
+                                .HasColumnType("integer");
+
+                            b1.Property<int>("Mode")
+                                .HasColumnType("integer");
+
+                            b1.Property<int>("OverdueMode")
+                                .HasColumnType("integer");
+
+                            b1.Property<TimeOnly>("ReminderTimeLocal")
+                                .HasColumnType("time without time zone");
+
+                            b1.HasKey("PaymentReminderSettingsRecurringPaymentId");
+
+                            b1.ToTable("PaymentReminderSettings");
+
+                            b1.WithOwner()
+                                .HasForeignKey("PaymentReminderSettingsRecurringPaymentId");
+                        });
+
+                    b.Navigation("Profile");
+                });
+
             modelBuilder.Entity("PersonalAssistant.Domain.PaymentTransaction", b =>
                 {
                     b.HasOne("PersonalAssistant.Domain.RecurringPayment", "RecurringPayment")
@@ -341,6 +453,8 @@ namespace PersonalAssistant.Infrastructure.Migrations
 
             modelBuilder.Entity("PersonalAssistant.Domain.RecurringPayment", b =>
                 {
+                    b.Navigation("ReminderSettings");
+
                     b.Navigation("Reminders");
 
                     b.Navigation("Transactions");
