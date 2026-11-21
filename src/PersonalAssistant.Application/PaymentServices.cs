@@ -76,7 +76,10 @@ internal static class MonthlyScheduleDates
     }
 }
 
-public sealed record PaymentListItem(Guid Id, string Name, decimal Amount, string Currency, DateOnly DueDate, int RecurrenceInterval, RecurrenceUnit RecurrenceUnit, PaymentMethod PaymentMethod, bool IsAutoDebit);
+public sealed record PaymentListItem(
+    Guid Id, string Name, decimal Amount, string Currency, DateOnly DueDate, int RecurrenceInterval,
+    RecurrenceUnit RecurrenceUnit, PaymentMethod PaymentMethod, bool IsAutoDebit,
+    int ScheduleDayOfMonth, bool IsLastDayOfMonth);
 
 public sealed record UpcomingPaymentItem(
     Guid Id,
@@ -88,7 +91,9 @@ public sealed record UpcomingPaymentItem(
     RecurrenceUnit RecurrenceUnit,
     PaymentMethod PaymentMethod,
     bool IsOverdue,
-    int DaysFromToday);
+    int DaysFromToday,
+    int ScheduleDayOfMonth,
+    bool IsLastDayOfMonth);
 
 public sealed record PaymentDetails(
     Guid Id,
@@ -164,7 +169,8 @@ public sealed class PaymentService(IPaymentRepository payments)
             .Where(x => x.NextPaymentDate.HasValue)
             .OrderBy(x => x.NextPaymentDate)
             .ThenBy(x => x.Name)
-            .Select(x => new PaymentListItem(x.Id, x.Name, x.Amount, x.Currency, x.NextPaymentDate!.Value, x.RecurrenceInterval, x.RecurrenceUnit, x.PaymentMethod, x.IsAutoDebit))
+            .Select(x => new PaymentListItem(x.Id, x.Name, x.Amount, x.Currency, x.NextPaymentDate!.Value,
+                x.RecurrenceInterval, x.RecurrenceUnit, x.PaymentMethod, x.IsAutoDebit, x.ScheduleDayOfMonth, x.IsLastDayOfMonth))
             .ToList();
     }
 
@@ -187,7 +193,9 @@ public sealed class PaymentService(IPaymentRepository payments)
                 x.RecurrenceUnit,
                 x.PaymentMethod,
                 x.NextPaymentDate.Value < today,
-                x.NextPaymentDate.Value.DayNumber - today.DayNumber))
+                x.NextPaymentDate.Value.DayNumber - today.DayNumber,
+                x.ScheduleDayOfMonth,
+                x.IsLastDayOfMonth))
             .OrderBy(x => x.DueDate)
             .ThenBy(x => x.Name)
             .ToList();
